@@ -47,6 +47,11 @@ Do not commit release keystores or signing passwords.
 Before contributing, read [CONTRIBUTING.md](CONTRIBUTING.md) for the branch,
 testing, pull request, and secret-handling checklist.
 
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for needed fixes, planned functions, and future
+improvements.
+
 ## Firebase
 
 The Flutter client config files are included so the app can connect to the
