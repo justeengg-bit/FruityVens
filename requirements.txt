@@ -1,0 +1,24 @@
+# FruityVens AI Model Requirements
+# Install with: pip install -r requirements.txt
+
+# Core ML/Vision
+ultralytics>=8.0.0  # YOLOv8 framework
+torch>=2.0.0        # PyTorch
+torchvision>=0.15.0 # Computer vision utilities
+
+# Image Processing
+opencv-python>=4.8.0
+Pillow>=10.0.0
+
+# Utilities
+numpy>=1.24.0
+PyYAML>=6.0
+requests>=2.31.0
+
+# Optional: GPU support (uncomment if using CUDA)
+# torch-cuda  # For GPU acceleration
+# onnx>=1.14.0  # For model conversion
+
+# Optional: Performance
+# nvidia-tensorrt>=8.6.0  # For TensorRT optimization
+# tensorrt-libs>=8.6.0

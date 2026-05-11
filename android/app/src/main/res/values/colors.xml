@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="fruityvens_bg_base">#0D1F0F</color>
+    <color name="fruityvens_bg_card">#1A3320</color>
+    <color name="fruityvens_palm">#43A047</color>
+    <color name="fruityvens_palm_light">#81C784</color>
+    <color name="fruityvens_orange">#FB8C00</color>
+    <color name="fruityvens_grape">#EC407A</color>
+    <color name="fruityvens_grape_light">#F48FB1</color>
+    <color name="fruityvens_text">#FFF3E0</color>
+</resources>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="LaunchTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowSplashScreenBackground">@color/fruityvens_bg_base</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/fruityvens_splash_mark</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/fruityvens_bg_card</item>
+        <item name="android:windowBackground">@drawable/launch_background</item>
+    </style>
+
+    <style name="NormalTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/fruityvens_bg_base</item>
+    </style>
+</resources>
