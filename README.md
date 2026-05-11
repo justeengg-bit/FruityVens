@@ -42,6 +42,11 @@ flutter build apk --debug
 For a signed release build, create your own local Android signing files first.
 Do not commit release keystores or signing passwords.
 
+## Contributing
+
+Before contributing, read [CONTRIBUTING.md](CONTRIBUTING.md) for the branch,
+testing, pull request, and secret-handling checklist.
+
 ## Firebase
 
 The Flutter client config files are included so the app can connect to the
