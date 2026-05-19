@@ -22,6 +22,7 @@ import 'services/camera_eye_service.dart';
 import 'services/firebase_sync_service.dart';
 import 'services/fruit_detection_service.dart';
 import 'services/report_export_service.dart';
+import 'services/scale_log_service.dart';
 
 final GlobalKey<ScaffoldMessengerState> fruityVensMessengerKey =
     GlobalKey<ScaffoldMessengerState>();
@@ -177,9 +178,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   static const String _phoneLinkEnabledKey = 'phone_link_enabled';
   static const String _phoneLinkPinKey = 'phone_link_pin_secret';
   static const String _fruitDetectionModelKey = 'fruit_detection_model_id';
+  static const String _scaleApiBaseUrlKey = 'scale_api_base_url';
   static const String _fruitDetectionAutoMode = 'auto';
   static const String _inventoryPriceConfiguredPrefix =
       'inventory_price_configured_';
+  static const String _defaultScaleApiBaseUrl = String.fromEnvironment(
+    'FRUITYVENS_SCALE_BASE_URL',
+  );
   static const String _googleServerClientId = String.fromEnvironment(
     'FRUITYVENS_GOOGLE_SERVER_CLIENT_ID',
   );
@@ -192,6 +197,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   final CameraEyeService _cameraEyeService = const CameraEyeService();
   final FirebaseSyncService _firebaseSyncService = const FirebaseSyncService();
   final ReportExportService _reportExportService = const ReportExportService();
+  final ScaleLogService _scaleLogService = const ScaleLogService();
   final LocalAuthentication _localAuth = LocalAuthentication();
   Future<void>? _googleSignInInitialization;
   final TextEditingController _usernameController = TextEditingController();
@@ -204,6 +210,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       TextEditingController();
   final TextEditingController _resetEmailController = TextEditingController();
   final TextEditingController _newPriceController = TextEditingController();
+  final TextEditingController _scaleBaseUrlController = TextEditingController();
   final Map<String, TextEditingController> _priceInputControllers =
       <String, TextEditingController>{};
   final Map<String, FocusNode> _priceInputFocusNodes = <String, FocusNode>{};
@@ -243,6 +250,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   Map<String, Object?>? _deviceProfile;
   DateTime? _lastBackGestureAt;
   Timer? _cloudSyncTimer;
+  Timer? _scaleLogTimer;
   Timer? _splashFadeTimer;
   Timer? _splashRemoveTimer;
   CameraEyeStatus _cameraEyeStatus = const CameraEyeStatus.idle();
@@ -258,6 +266,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   String? _fruitToAdd;
   String? _expandedInventoryFruit;
   String? _priceConflictNotice;
+  String _scaleBaseUrl = '';
+  String _scaleLogStatus = 'Scale log not configured';
+  bool _scaleLogSyncRunning = false;
+  DateTime? _lastScaleLogSyncAt;
   List<TransactionData> _realTransactionHistory = <TransactionData>[];
   List<LocalPriceChange> _priceChangeHistory = <LocalPriceChange>[];
   final Set<String> _configuredPriceFruits = <String>{};
@@ -509,6 +521,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     _loadRememberedAccount();
     _loadDeviceId();
     _loadFruitDetectionModelPreference();
+    unawaited(_loadScaleLogSettings());
     _loadInventoryFromDatabase();
     _loadTransactionsFromDatabase();
     _loadPriceHistoryFromDatabase();
@@ -531,6 +544,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     _signupConfirmController.dispose();
     _resetEmailController.dispose();
     _newPriceController.dispose();
+    _scaleBaseUrlController.dispose();
     for (final TextEditingController controller
         in _priceInputControllers.values) {
       controller.dispose();
@@ -539,6 +553,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       focusNode.dispose();
     }
     _cloudSyncTimer?.cancel();
+    _scaleLogTimer?.cancel();
     _splashFadeTimer?.cancel();
     _splashRemoveTimer?.cancel();
     if (_ownsDatabase) {
@@ -574,6 +589,187 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     _cloudSyncTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       unawaited(_syncWhenInternetReturns());
     });
+  }
+
+  Future<void> _loadScaleLogSettings() async {
+    final String? savedUrl = await _database.getSetting(_scaleApiBaseUrlKey);
+    final String scaleUrl = (savedUrl ?? _defaultScaleApiBaseUrl).trim();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _scaleBaseUrl = scaleUrl;
+      _scaleLogStatus = scaleUrl.isEmpty
+          ? 'Scale log not configured'
+          : 'Scale log sync ready';
+    });
+    _scaleBaseUrlController.text = scaleUrl;
+    _startScaleLogMonitor();
+  }
+
+  void _startScaleLogMonitor() {
+    _scaleLogTimer?.cancel();
+    if (_scaleBaseUrl.trim().isEmpty) {
+      return;
+    }
+    _scaleLogTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      unawaited(_fetchConfirmedScaleLogs());
+    });
+    unawaited(_fetchConfirmedScaleLogs());
+  }
+
+  bool get _scaleLogCanImport {
+    return _scaleBaseUrl.trim().isNotEmpty &&
+        !_isGuestSession &&
+        _screen != AppScreen.walkthrough &&
+        _screen != AppScreen.login &&
+        _screen != AppScreen.createAccount &&
+        _screen != AppScreen.forgotPassword;
+  }
+
+  Future<void> _saveScaleBaseUrl({StateSetter? dialogSetState}) async {
+    final String nextUrl = _scaleBaseUrlController.text.trim();
+    if (nextUrl.isNotEmpty) {
+      final Uri? parsed = Uri.tryParse(nextUrl);
+      if (parsed == null || !parsed.hasScheme || parsed.host.isEmpty) {
+        _toast('Enter a valid scale URL like http://192.168.1.25.');
+        return;
+      }
+    }
+
+    await _database.saveSetting(_scaleApiBaseUrlKey, nextUrl);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _scaleBaseUrl = nextUrl;
+      _scaleLogStatus = nextUrl.isEmpty
+          ? 'Scale log not configured'
+          : 'Scale log sync ready';
+    });
+    dialogSetState?.call(() {});
+    _startScaleLogMonitor();
+    _toast(
+      nextUrl.isEmpty ? 'Scale log sync disabled.' : 'Scale log sync saved.',
+    );
+  }
+
+  Future<void> _fetchConfirmedScaleLogs({bool showToast = false}) async {
+    if (_scaleLogSyncRunning || _scaleBaseUrl.trim().isEmpty) {
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    if (!_scaleLogCanImport) {
+      if (showToast) {
+        _toast('Sign in to save confirmed scale logs.');
+      }
+      return;
+    }
+
+    setState(() {
+      _scaleLogSyncRunning = true;
+      _scaleLogStatus = 'Checking scale logs...';
+    });
+
+    try {
+      final List<ScaleSaleLog> logs = await _scaleLogService.fetchSales(
+        _scaleBaseUrl,
+      );
+      int imported = 0;
+      for (final ScaleSaleLog log in logs) {
+        final bool saved = await _saveScaleSaleLog(log);
+        if (saved) {
+          imported++;
+        }
+      }
+      if (imported > 0) {
+        await _loadTransactionsFromDatabase();
+        unawaited(_syncTransactionsToFirebase());
+      }
+      if (!mounted) {
+        return;
+      }
+      final DateTime syncedAt = DateTime.now();
+      setState(() {
+        _lastScaleLogSyncAt = syncedAt;
+        _scaleLogStatus = imported == 0
+            ? 'Scale logs checked ${_formatTime(syncedAt)}'
+            : 'Imported $imported confirmed sale${imported == 1 ? '' : 's'}';
+      });
+      if (showToast) {
+        _toast(
+          imported == 0
+              ? 'No new confirmed scale sales.'
+              : 'Imported $imported confirmed scale sale${imported == 1 ? '' : 's'}.',
+        );
+      }
+    } on ScaleLogException catch (error, stackTrace) {
+      developer.log(
+        'Scale log sync failed',
+        name: 'FruityVensScale',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _scaleLogStatus = error.message;
+      });
+      if (showToast) {
+        _toast(error.message);
+      }
+    } catch (error, stackTrace) {
+      developer.log(
+        'Unexpected scale log sync failure',
+        name: 'FruityVensScale',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _scaleLogStatus = 'Scale log sync failed.';
+      });
+      if (showToast) {
+        _toast('Scale log sync failed: $error');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _scaleLogSyncRunning = false;
+        });
+      } else {
+        _scaleLogSyncRunning = false;
+      }
+    }
+  }
+
+  Future<bool> _saveScaleSaleLog(ScaleSaleLog log) async {
+    final String cloudId = log.cloudId(_scaleBaseUrl);
+    if (await _database.saleExistsByCloudId(cloudId)) {
+      return false;
+    }
+    final int unitPrice = log.pricePerKgCentavos > 0
+        ? log.pricePerKgCentavos
+        : (_inventorySavedPrice(log.fruitName) ??
+              _catalogPriceCentavos(log.fruitName));
+    final int totalPrice = log.priceCentavos > 0
+        ? log.priceCentavos
+        : ((unitPrice * log.weightGrams) / 1000).round();
+    await _database.addSale(
+      cloudId: cloudId,
+      fruitName: log.fruitName,
+      weightGrams: math.max(0, log.weightGrams),
+      unitPrice: math.max(0, unitPrice),
+      totalPrice: math.max(0, totalPrice),
+      soldAt: log.soldAt,
+      status: 'sold',
+    );
+    return true;
   }
 
   Future<void> _syncWhenInternetReturns() async {
@@ -5418,6 +5614,118 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       for (final FruitDetectionModel model
                           in FruitDetectionService.builtInModels)
                         modelTile(model),
+                      const Divider(color: AppColors.borderSoft, height: 28),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Container(
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: AppColors.palm.withValues(alpha: 0.14),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Icon(
+                              Icons.scale_rounded,
+                              color: AppColors.greenText,
+                              size: 20,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                Row(
+                                  children: <Widget>[
+                                    const Expanded(
+                                      child: Text(
+                                        'Scale log sync',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                    ),
+                                    if (_scaleLogSyncRunning)
+                                      StatusBadge.blue('CHECKING')
+                                    else if (_scaleBaseUrl.isEmpty)
+                                      const StatusBadge.orange('OFF')
+                                    else
+                                      const StatusBadge.green('ON'),
+                                  ],
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  _scaleLogStatus,
+                                  style: const TextStyle(
+                                    color: AppColors.textSecondary,
+                                    fontSize: 12,
+                                    height: 1.35,
+                                  ),
+                                ),
+                                if (_lastScaleLogSyncAt != null) ...<Widget>[
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Last checked ${_formatTime(_lastScaleLogSyncAt!)}',
+                                    style: const TextStyle(
+                                      color: AppColors.textMuted,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      AppTextField(
+                        controller: _scaleBaseUrlController,
+                        label: 'Scale API URL',
+                        hint: 'http://192.168.1.25',
+                        keyboardType: TextInputType.url,
+                        prefixIcon: Icons.link_rounded,
+                        textInputAction: TextInputAction.done,
+                        onSubmitted: (_) => unawaited(
+                          _saveScaleBaseUrl(dialogSetState: setDialogState),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: GhostButton(
+                              label: 'Save',
+                              icon: Icons.save_rounded,
+                              onPressed: () => unawaited(
+                                _saveScaleBaseUrl(
+                                  dialogSetState: setDialogState,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: GhostButton(
+                              label: 'Fetch logs',
+                              icon: Icons.sync_rounded,
+                              highlighted: true,
+                              onPressed: _scaleLogSyncRunning
+                                  ? null
+                                  : () => unawaited(
+                                      _fetchConfirmedScaleLogs(
+                                        showToast: true,
+                                      ).then((_) {
+                                        if (mounted) {
+                                          setDialogState(() {});
+                                        }
+                                      }),
+                                    ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                 ),

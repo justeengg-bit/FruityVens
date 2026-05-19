@@ -686,37 +686,61 @@ class AppDatabase {
   }
 
   Future<int> addSale({
+    String? cloudId,
     required String fruitName,
     required int weightGrams,
     required int unitPrice,
     required int totalPrice,
     String status = 'sold',
+    DateTime? soldAt,
   }) async {
+    final DateTime effectiveSoldAt = soldAt ?? DateTime.now();
     if (_memory) {
+      if (cloudId != null) {
+        for (final LocalSale sale in _memorySales) {
+          if (sale.cloudId == cloudId && sale.id != null) {
+            return sale.id!;
+          }
+        }
+      }
       _memorySaleId += 1;
       _memorySales.insert(
         0,
         LocalSale(
           id: _memorySaleId,
+          cloudId: cloudId,
           fruitName: fruitName,
           weightGrams: weightGrams,
           unitPrice: unitPrice,
           totalPrice: totalPrice,
           status: status,
-          soldAt: DateTime.now(),
+          soldAt: effectiveSoldAt,
         ),
       );
       return _memorySaleId;
     }
 
     final Database db = await _database;
+    if (cloudId != null) {
+      final List<Map<String, Object?>> rows = await db.query(
+        'sales_transactions',
+        columns: <String>['id'],
+        where: 'cloud_id = ?',
+        whereArgs: <Object>[cloudId],
+        limit: 1,
+      );
+      if (rows.isNotEmpty) {
+        return rows.first['id']! as int;
+      }
+    }
     final int id = await db.insert('sales_transactions', <String, Object?>{
+      'cloud_id': cloudId,
       'fruit_name': fruitName,
       'weight_grams': weightGrams,
       'unit_price': unitPrice,
       'total_price': totalPrice,
       'status': status,
-      'sold_at': DateTime.now().toIso8601String(),
+      'sold_at': effectiveSoldAt.toIso8601String(),
       'synced': 0,
     });
     await enqueueSync(
@@ -724,7 +748,7 @@ class AppDatabase {
       entityId: id.toString(),
       action: 'insert',
       payload:
-          '{"fruitName":"$fruitName","weightGrams":$weightGrams,"unitPrice":$unitPrice,"totalPrice":$totalPrice,"status":"$status"}',
+          '{"fruitName":"$fruitName","weightGrams":$weightGrams,"unitPrice":$unitPrice,"totalPrice":$totalPrice,"status":"$status","soldAt":"${effectiveSoldAt.toIso8601String()}"}',
     );
     return id;
   }
@@ -742,6 +766,22 @@ class AppDatabase {
       limit: limit,
     );
     return rows.map(LocalSale.fromMap).toList();
+  }
+
+  Future<bool> saleExistsByCloudId(String cloudId) async {
+    if (_memory) {
+      return _memorySales.any((LocalSale sale) => sale.cloudId == cloudId);
+    }
+
+    final Database db = await _database;
+    final List<Map<String, Object?>> rows = await db.query(
+      'sales_transactions',
+      columns: <String>['id'],
+      where: 'cloud_id = ?',
+      whereArgs: <Object>[cloudId],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
   }
 
   Future<LocalFruit?> getManagedFruit(String name) async {
