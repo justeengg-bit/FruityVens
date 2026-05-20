@@ -173,6 +173,41 @@ class ScaleLogService {
     }
   }
 
+  Future<void> acknowledgeSales({
+    required String baseUrl,
+    required Iterable<int> saleIds,
+  }) async {
+    final List<int> ids = saleIds.toSet().toList()..sort();
+    if (ids.isEmpty) {
+      return;
+    }
+
+    final Uri uri = _endpoint(baseUrl, '/sales/ack');
+    final http.Client client = _client ?? http.Client();
+    try {
+      final http.Response response = await client
+          .post(
+            uri,
+            headers: const <String, String>{'Content-Type': 'application/json'},
+            body: jsonEncode(<String, Object?>{'ids': ids}),
+          )
+          .timeout(timeout);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw ScaleLogException(
+          'Scale ack returned HTTP ${response.statusCode}.',
+        );
+      }
+    } on ScaleLogException {
+      rethrow;
+    } catch (error) {
+      throw ScaleLogException('Could not acknowledge scale logs: $error');
+    } finally {
+      if (_client == null) {
+        client.close();
+      }
+    }
+  }
+
   Uri _endpoint(String baseUrl, String path) {
     final String cleanBase = baseUrl.trim().replaceFirst(RegExp(r'/+$'), '');
     if (cleanBase.isEmpty) {

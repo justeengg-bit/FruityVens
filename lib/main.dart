@@ -678,11 +678,19 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         _scaleBaseUrl,
       );
       int imported = 0;
+      final List<int> acknowledgedIds = <int>[];
       for (final ScaleSaleLog log in logs) {
         final bool saved = await _saveScaleSaleLog(log);
         if (saved) {
           imported++;
         }
+        acknowledgedIds.add(log.id);
+      }
+      if (acknowledgedIds.isNotEmpty) {
+        await _scaleLogService.acknowledgeSales(
+          baseUrl: _scaleBaseUrl,
+          saleIds: acknowledgedIds,
+        );
       }
       if (imported > 0) {
         await _loadTransactionsFromDatabase();
@@ -696,13 +704,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         _lastScaleLogSyncAt = syncedAt;
         _scaleLogStatus = imported == 0
             ? 'Scale logs checked ${_formatTime(syncedAt)}'
-            : 'Imported $imported confirmed sale${imported == 1 ? '' : 's'}';
+            : 'Imported and acknowledged $imported sale${imported == 1 ? '' : 's'}';
       });
       if (showToast) {
         _toast(
           imported == 0
               ? 'No new confirmed scale sales.'
-              : 'Imported $imported confirmed scale sale${imported == 1 ? '' : 's'}.',
+              : 'Imported and cleared $imported scale sale${imported == 1 ? '' : 's'}.',
         );
       }
     } on ScaleLogException catch (error, stackTrace) {
