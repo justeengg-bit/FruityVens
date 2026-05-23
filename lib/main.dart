@@ -188,6 +188,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     'FRUITYVENS_SCALE_DEVICE_ID',
     defaultValue: 'fruityvens-scale-01',
   );
+  static const Duration _scaleLogAutoPollInterval = Duration(seconds: 15);
   static const String _googleServerClientId = String.fromEnvironment(
     'FRUITYVENS_GOOGLE_SERVER_CLIENT_ID',
   );
@@ -662,10 +663,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     if (_scaleBaseUrl.trim().isEmpty) {
       return;
     }
-    _scaleLogTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-      unawaited(_fetchConfirmedScaleLogs());
+    _scaleLogTimer = Timer.periodic(_scaleLogAutoPollInterval, (_) {
+      unawaited(_fetchConfirmedScaleLogs(showProgress: false));
     });
-    unawaited(_fetchConfirmedScaleLogs());
+    unawaited(_fetchConfirmedScaleLogs(showProgress: false));
   }
 
   bool get _scaleLogCanImport {
@@ -698,7 +699,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     );
   }
 
-  Future<void> _fetchConfirmedScaleLogs({bool showToast = false}) async {
+  Future<void> _fetchConfirmedScaleLogs({
+    bool showToast = false,
+    bool showProgress = true,
+  }) async {
     if (_scaleLogSyncRunning || _scaleBaseUrl.trim().isEmpty) {
       return;
     }
@@ -714,7 +718,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
     setState(() {
       _scaleLogSyncRunning = true;
-      _scaleLogStatus = 'Checking scale logs...';
+      if (showProgress) {
+        _scaleLogStatus = 'Checking Firebase scale...';
+      }
     });
 
     try {
@@ -746,9 +752,15 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       final DateTime syncedAt = DateTime.now();
       setState(() {
         _lastScaleLogSyncAt = syncedAt;
-        _scaleLogStatus = imported == 0
-            ? 'Firebase scale checked ${_formatTime(syncedAt)}'
-            : 'Imported $imported Firebase scale sale${imported == 1 ? '' : 's'}';
+        if (imported > 0) {
+          _scaleLogStatus =
+              'Imported $imported Firebase scale sale${imported == 1 ? '' : 's'}';
+        } else if (showProgress) {
+          _scaleLogStatus = 'No new Firebase scale sales.';
+        } else if (_scaleLogStatus == 'Checking Firebase scale...' ||
+            _scaleLogStatus == 'Firebase scale sync ready') {
+          _scaleLogStatus = 'Firebase scale sync ready';
+        }
       });
       if (showToast) {
         _toast(
