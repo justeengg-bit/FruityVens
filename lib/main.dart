@@ -4285,47 +4285,49 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       },
       child: Scaffold(
         resizeToAvoidBottomInset: false,
-        body: Stack(
-          children: <Widget>[
-            SafeArea(
-              child: LayoutBuilder(
-                builder: (BuildContext context, BoxConstraints constraints) {
-                  return Align(
-                    alignment: Alignment.topCenter,
-                    child: SizedBox(
-                      width: math.min(920, constraints.maxWidth),
-                      height: constraints.maxHeight,
-                      child: _screenShell(),
-                    ),
-                  );
-                },
-              ),
-            ),
-            if (_screen != AppScreen.walkthrough &&
-                _screen != AppScreen.login &&
-                _screen != AppScreen.createAccount &&
-                _screen != AppScreen.forgotPassword)
-              _operationsSidePanelOverlay(),
-            if (_phoneUnlockGateVisible)
-              Positioned.fill(
-                child: _PhoneUnlockGate(
-                  email: _activePhoneLinkEmail,
-                  biometricsEnabled: _biometricAutoLoginEnabled,
+        body: _KeyboardStableViewport(
+          child: Stack(
+            children: <Widget>[
+              SafeArea(
+                child: LayoutBuilder(
+                  builder: (BuildContext context, BoxConstraints constraints) {
+                    return Align(
+                      alignment: Alignment.topCenter,
+                      child: SizedBox(
+                        width: math.min(920, constraints.maxWidth),
+                        height: constraints.maxHeight,
+                        child: _screenShell(),
+                      ),
+                    );
+                  },
                 ),
               ),
-            if (_splashMounted)
-              Positioned.fill(
-                child: IgnorePointer(
-                  ignoring: !_splashVisible,
-                  child: AnimatedOpacity(
-                    opacity: _splashVisible ? 1 : 0,
-                    duration: const Duration(milliseconds: 420),
-                    curve: Curves.easeOutCubic,
-                    child: const FloatingGlassSplash(),
+              if (_screen != AppScreen.walkthrough &&
+                  _screen != AppScreen.login &&
+                  _screen != AppScreen.createAccount &&
+                  _screen != AppScreen.forgotPassword)
+                _operationsSidePanelOverlay(),
+              if (_phoneUnlockGateVisible)
+                Positioned.fill(
+                  child: _PhoneUnlockGate(
+                    email: _activePhoneLinkEmail,
+                    biometricsEnabled: _biometricAutoLoginEnabled,
                   ),
                 ),
-              ),
-          ],
+              if (_splashMounted)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    ignoring: !_splashVisible,
+                    child: AnimatedOpacity(
+                      opacity: _splashVisible ? 1 : 0,
+                      duration: const Duration(milliseconds: 420),
+                      curve: Curves.easeOutCubic,
+                      child: const FloatingGlassSplash(),
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -4333,11 +4335,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
   Widget _screenShell() {
     final Widget? fixedNav = _fixedScreenNav();
-    final double keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
-    final double bottomPadding = 32 + keyboardInset;
     final EdgeInsets contentPadding = fixedNav == null
-        ? EdgeInsets.fromLTRB(16, 16, 16, bottomPadding)
-        : EdgeInsets.fromLTRB(16, 14, 16, bottomPadding);
+        ? const EdgeInsets.fromLTRB(16, 16, 16, 32)
+        : const EdgeInsets.fromLTRB(16, 14, 16, 32);
 
     final Widget scrollableContent = SingleChildScrollView(
       physics: const AlwaysScrollableScrollPhysics(),
@@ -9063,6 +9063,21 @@ class _RestockSignal {
   final Widget badge;
 }
 
+class _KeyboardStableViewport extends StatelessWidget {
+  const _KeyboardStableViewport({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final MediaQueryData mediaQuery = MediaQuery.of(context);
+    return MediaQuery(
+      data: mediaQuery.removeViewInsets(removeBottom: true),
+      child: child,
+    );
+  }
+}
+
 class AnalyticsData {
   const AnalyticsData({
     required this.revenueLabels,
@@ -11448,6 +11463,7 @@ class SmartStepper extends StatelessWidget {
                     keyboardType: keyboardType,
                     textInputAction: textInputAction,
                     inputFormatters: inputFormatters,
+                    scrollPadding: const EdgeInsets.fromLTRB(20, 20, 20, 300),
                     autocorrect: false,
                     enableSuggestions: false,
                     onChanged: onChanged,
