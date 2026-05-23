@@ -13,7 +13,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:local_auth/local_auth.dart';
-import 'package:permission_handler/permission_handler.dart';
 
 import 'data/app_database.dart';
 import 'firebase_options.dart';
@@ -22,6 +21,7 @@ import 'services/camera_eye_service.dart';
 import 'services/firebase_sync_service.dart';
 import 'services/fruit_detection_service.dart';
 import 'services/report_export_service.dart';
+import 'services/scale_log_service.dart';
 
 final GlobalKey<ScaffoldMessengerState> fruityVensMessengerKey =
     GlobalKey<ScaffoldMessengerState>();
@@ -152,6 +152,8 @@ enum AppScreen {
 
 enum AnalyticsPeriod { sevenDays, thirtyDays, month, year, allTime }
 
+enum _TransactionHistoryAction { keep, cancel, restore, remove }
+
 class _PhoneLinkSetup {
   const _PhoneLinkSetup({required this.pin, required this.useBiometrics});
 
@@ -177,9 +179,15 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   static const String _phoneLinkEnabledKey = 'phone_link_enabled';
   static const String _phoneLinkPinKey = 'phone_link_pin_secret';
   static const String _fruitDetectionModelKey = 'fruit_detection_model_id';
+  static const String _scaleDeviceIdKey = 'scale_device_id';
   static const String _fruitDetectionAutoMode = 'auto';
   static const String _inventoryPriceConfiguredPrefix =
       'inventory_price_configured_';
+  static const String _defaultScaleDeviceId = String.fromEnvironment(
+    'FRUITYVENS_SCALE_DEVICE_ID',
+    defaultValue: 'fruityvens-scale-01',
+  );
+  static const Duration _scaleLogAutoPollInterval = Duration(seconds: 15);
   static const String _googleServerClientId = String.fromEnvironment(
     'FRUITYVENS_GOOGLE_SERVER_CLIENT_ID',
   );
@@ -192,6 +200,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   final CameraEyeService _cameraEyeService = const CameraEyeService();
   final FirebaseSyncService _firebaseSyncService = const FirebaseSyncService();
   final ReportExportService _reportExportService = const ReportExportService();
+  final ScaleLogService _scaleLogService = const ScaleLogService();
   final LocalAuthentication _localAuth = LocalAuthentication();
   Future<void>? _googleSignInInitialization;
   final TextEditingController _usernameController = TextEditingController();
@@ -204,6 +213,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       TextEditingController();
   final TextEditingController _resetEmailController = TextEditingController();
   final TextEditingController _newPriceController = TextEditingController();
+  final TextEditingController _scaleBaseUrlController = TextEditingController();
   final Map<String, TextEditingController> _priceInputControllers =
       <String, TextEditingController>{};
   final Map<String, FocusNode> _priceInputFocusNodes = <String, FocusNode>{};
@@ -243,6 +253,11 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   Map<String, Object?>? _deviceProfile;
   DateTime? _lastBackGestureAt;
   Timer? _cloudSyncTimer;
+  StreamSubscription<List<Map<String, Object?>>>? _inventoryLiveSubscription;
+  StreamSubscription<List<Map<String, Object?>>>? _transactionsLiveSubscription;
+  String? _liveSyncUserId;
+  int _liveSyncGeneration = 0;
+  Timer? _scaleLogTimer;
   Timer? _splashFadeTimer;
   Timer? _splashRemoveTimer;
   CameraEyeStatus _cameraEyeStatus = const CameraEyeStatus.idle();
@@ -255,9 +270,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   int _walkthroughPage = 0;
   int _selectedYear = DateTime.now().year;
   int _selectedMonth = DateTime.now().month - 1;
+  DateTime _selectedHistoryDate = _historyDateOnly(DateTime.now());
   String? _fruitToAdd;
   String? _expandedInventoryFruit;
   String? _priceConflictNotice;
+  String _scaleBaseUrl = '';
+  String _scaleLogStatus = 'Scale device not configured';
+  bool _scaleLogSyncRunning = false;
+  DateTime? _lastScaleLogSyncAt;
   List<TransactionData> _realTransactionHistory = <TransactionData>[];
   List<LocalPriceChange> _priceChangeHistory = <LocalPriceChange>[];
   final Set<String> _configuredPriceFruits = <String>{};
@@ -271,6 +291,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     'Grapes',
   ];
   final Map<String, int> _prices = <String, int>{};
+  final Map<String, int> _draftPrices = <String, int>{};
   final Map<String, int> _stocks = <String, int>{};
 
   static const List<TransactionData> _demoTransactionHistory =
@@ -425,37 +446,64 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   List<TransactionData> get _activeTransactionHistory =>
       _isGuestSession ? _demoTransactionHistory : _realTransactionHistory;
 
+  List<TransactionData> get _visibleTransactionHistory =>
+      _activeTransactionHistory
+          .where(
+            (TransactionData transaction) => transaction.status != 'Removed',
+          )
+          .toList(growable: false);
+
+  List<TransactionData> get _selectedHistoryDateTransactions =>
+      _visibleTransactionHistory
+          .where((TransactionData transaction) {
+            final DateTime? soldDate = _transactionHistoryDay(transaction);
+            return soldDate != null &&
+                _isSameDay(soldDate, _selectedHistoryDate);
+          })
+          .toList(growable: false);
+
   static const Map<String, FruitInfo> _catalog = <String, FruitInfo>{
     'Apple': FruitInfo('Apple', Icons.apple_rounded, 90, 20),
-    'Mango': FruitInfo('Mango', Icons.spa_rounded, 60, 42),
-    'Watermelon': FruitInfo('Watermelon', Icons.circle_rounded, 50, 60),
-    'Melon': FruitInfo('Melon', Icons.blur_circular_rounded, 55, 16),
-    'Papaya': FruitInfo('Papaya', Icons.eco_rounded, 50, 15),
-    'Avocado': FruitInfo('Avocado', Icons.grass_rounded, 110, 18),
-    'Mango Carabao': FruitInfo('Mango Carabao', Icons.spa_rounded, 80, 14),
-    'Indian Mango': FruitInfo('Indian Mango', Icons.spa_rounded, 75, 12),
     'Orange': FruitInfo('Orange', Icons.circle_rounded, 85, 25),
-    'Lemon': FruitInfo('Lemon', Icons.brightness_1_rounded, 70, 17),
-    'Grapes': FruitInfo('Grapes', Icons.bubble_chart_rounded, 130, 10),
-    'Pear': FruitInfo('Pear', Icons.local_florist_rounded, 95, 11),
     'Banana': FruitInfo('Banana', Icons.rice_bowl_rounded, 35, 28),
-    'Langkatan': FruitInfo('Langkatan', Icons.rice_bowl_rounded, 45, 9),
+    'Mango': FruitInfo('Mango', Icons.spa_rounded, 60, 42),
+    'Grapes': FruitInfo('Grapes', Icons.bubble_chart_rounded, 130, 10),
+    'Lemon': FruitInfo('Lemon', Icons.brightness_1_rounded, 70, 17),
+    'Papaya': FruitInfo('Papaya', Icons.eco_rounded, 50, 15),
+    'Watermelon': FruitInfo('Watermelon', Icons.circle_rounded, 50, 60),
     'Pineapple': FruitInfo('Pineapple', Icons.park_rounded, 45, 0),
-    'Lanzones': FruitInfo('Lanzones', Icons.scatter_plot_rounded, 120, 7),
     'Calamansi': FruitInfo('Calamansi', Icons.brightness_1_rounded, 65, 13),
-    'Guyabano': FruitInfo('Guyabano', Icons.eco_rounded, 100, 8),
     'Pomelo': FruitInfo('Pomelo', Icons.circle_rounded, 95, 10),
     'Guava': FruitInfo('Guava', Icons.local_florist_rounded, 50, 21),
+    'Avocado': FruitInfo('Avocado', Icons.grass_rounded, 110, 18),
+    'Coconut': FruitInfo('Coconut', Icons.beach_access_rounded, 35, 20),
+    'Dalandan': FruitInfo('Dalandan', Icons.circle_rounded, 75, 18),
+    'Dragon Fruit': FruitInfo(
+      'Dragon Fruit',
+      Icons.auto_awesome_rounded,
+      140,
+      8,
+    ),
+    'Durian': FruitInfo('Durian', Icons.energy_savings_leaf_rounded, 180, 6),
+    'Mangosteen': FruitInfo('Mangosteen', Icons.blur_circular_rounded, 160, 9),
+    'Rambutan': FruitInfo('Rambutan', Icons.scatter_plot_rounded, 120, 11),
+    'Lanzones': FruitInfo('Lanzones', Icons.scatter_plot_rounded, 120, 7),
+    'Chico': FruitInfo('Chico', Icons.spa_rounded, 80, 12),
+    'Atis': FruitInfo('Atis', Icons.eco_rounded, 95, 10),
+    'Santol': FruitInfo('Santol', Icons.trip_origin_rounded, 70, 14),
+    'Star Apple': FruitInfo('Star Apple', Icons.stars_rounded, 90, 9),
+    'Jackfruit': FruitInfo('Jackfruit', Icons.park_rounded, 65, 8),
+    'Tamarind': FruitInfo('Tamarind', Icons.grass_rounded, 75, 12),
+    'Melon': FruitInfo('Melon', Icons.blur_circular_rounded, 55, 16),
+    'Guyabano': FruitInfo('Guyabano', Icons.eco_rounded, 100, 8),
+    'Mango Carabao': FruitInfo('Mango Carabao', Icons.spa_rounded, 80, 14),
+    'Indian Mango': FruitInfo('Indian Mango', Icons.spa_rounded, 75, 12),
+    'Langkatan': FruitInfo('Langkatan', Icons.rice_bowl_rounded, 45, 9),
+    'Pear': FruitInfo('Pear', Icons.local_florist_rounded, 95, 11),
     'Strawberries': FruitInfo('Strawberries', Icons.favorite_rounded, 120, 8),
   };
 
-  static const Set<String> _scanReadyFruits = <String>{
-    'Apple',
-    'Banana',
-    'Grapes',
-    'Mango',
-    'Orange',
-  };
+  static final Set<String> _scanReadyFruits = _catalog.keys.toSet();
 
   static const List<String> _scanReadyFruitOrder = <String>[
     'Apple',
@@ -463,6 +511,34 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     'Banana',
     'Mango',
     'Grapes',
+    'Lemon',
+    'Papaya',
+    'Watermelon',
+    'Pineapple',
+    'Calamansi',
+    'Pomelo',
+    'Guava',
+    'Avocado',
+    'Coconut',
+    'Dalandan',
+    'Dragon Fruit',
+    'Durian',
+    'Mangosteen',
+    'Rambutan',
+    'Lanzones',
+    'Chico',
+    'Atis',
+    'Santol',
+    'Star Apple',
+    'Jackfruit',
+    'Tamarind',
+    'Melon',
+    'Guyabano',
+    'Mango Carabao',
+    'Indian Mango',
+    'Langkatan',
+    'Pear',
+    'Strawberries',
   ];
 
   static const List<_WalkthroughStep> _walkthroughSteps = <_WalkthroughStep>[
@@ -509,6 +585,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     _loadRememberedAccount();
     _loadDeviceId();
     _loadFruitDetectionModelPreference();
+    unawaited(_loadScaleLogSettings());
     _loadInventoryFromDatabase();
     _loadTransactionsFromDatabase();
     _loadPriceHistoryFromDatabase();
@@ -531,6 +608,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     _signupConfirmController.dispose();
     _resetEmailController.dispose();
     _newPriceController.dispose();
+    _scaleBaseUrlController.dispose();
     for (final TextEditingController controller
         in _priceInputControllers.values) {
       controller.dispose();
@@ -539,6 +617,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       focusNode.dispose();
     }
     _cloudSyncTimer?.cancel();
+    _stopFirebaseLiveSync();
+    _scaleLogTimer?.cancel();
     _splashFadeTimer?.cancel();
     _splashRemoveTimer?.cancel();
     if (_ownsDatabase) {
@@ -576,6 +656,330 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     });
   }
 
+  void _startFirebaseLiveSync() {
+    final String? uid = _firebaseSyncService.currentUserId;
+    if (!_cloudSyncEnabled || _isGuestSession || uid == null) {
+      _stopFirebaseLiveSync();
+      return;
+    }
+    if (_liveSyncUserId == uid &&
+        _inventoryLiveSubscription != null &&
+        _transactionsLiveSubscription != null) {
+      return;
+    }
+
+    _stopFirebaseLiveSync();
+    _liveSyncGeneration += 1;
+    final int generation = _liveSyncGeneration;
+    _liveSyncUserId = uid;
+    _inventoryLiveSubscription = _firebaseSyncService.watchInventory().listen(
+      (List<Map<String, Object?>> inventory) {
+        unawaited(
+          _applyCloudInventoryFromFirebase(
+            inventory,
+            fromLiveSync: true,
+            liveSyncUserId: uid,
+            liveSyncGeneration: generation,
+          ),
+        );
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (!_isLiveSyncCurrent(uid, generation)) {
+          return;
+        }
+        _handleFirebaseLiveSyncError(
+          'Inventory live sync failed',
+          error,
+          stackTrace,
+        );
+      },
+    );
+    _transactionsLiveSubscription = _firebaseSyncService
+        .watchTransactions()
+        .listen(
+          (List<Map<String, Object?>> transactions) {
+            unawaited(
+              _applyCloudTransactionsFromFirebase(
+                transactions,
+                fromLiveSync: true,
+                liveSyncUserId: uid,
+                liveSyncGeneration: generation,
+              ),
+            );
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            if (!_isLiveSyncCurrent(uid, generation)) {
+              return;
+            }
+            _handleFirebaseLiveSyncError(
+              'Transaction live sync failed',
+              error,
+              stackTrace,
+            );
+          },
+        );
+  }
+
+  void _stopFirebaseLiveSync() {
+    _liveSyncGeneration += 1;
+    _liveSyncUserId = null;
+    final StreamSubscription<List<Map<String, Object?>>>? inventory =
+        _inventoryLiveSubscription;
+    final StreamSubscription<List<Map<String, Object?>>>? transactions =
+        _transactionsLiveSubscription;
+    _inventoryLiveSubscription = null;
+    _transactionsLiveSubscription = null;
+    if (inventory != null) {
+      unawaited(inventory.cancel());
+    }
+    if (transactions != null) {
+      unawaited(transactions.cancel());
+    }
+  }
+
+  bool _isLiveSyncCurrent(String userId, int generation) {
+    return mounted &&
+        !_isGuestSession &&
+        _cloudSyncEnabled &&
+        _liveSyncUserId == userId &&
+        _liveSyncGeneration == generation &&
+        _firebaseSyncService.currentUserId == userId;
+  }
+
+  bool _canApplyCloudLiveSync(String? userId, int? generation) {
+    if (userId == null || generation == null) {
+      return true;
+    }
+    return _isLiveSyncCurrent(userId, generation);
+  }
+
+  void _handleFirebaseLiveSyncError(
+    String message,
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    _logCloudSyncIssue(message, error, stackTrace);
+    if (!mounted) {
+      return;
+    }
+    final String syncMessage = _firebaseSyncErrorMessage(error);
+    setState(() {
+      _emailPasswordProviderBlocked = _isEmailPasswordProviderDisabledMessage(
+        syncMessage,
+      );
+      _cloudSyncStatus = _cloudStatusForSyncError(syncMessage);
+    });
+  }
+
+  String _firebaseSyncErrorMessage(Object error) {
+    if (error is FirebaseException) {
+      final String code = error.code.toLowerCase();
+      final String message = (error.message ?? '').toLowerCase();
+      if (code == 'permission-denied' ||
+          message.contains('permission denied') ||
+          message.contains('permission_denied')) {
+        return 'Realtime Database rules blocked cloud sync. Allow users/{uid} reads and writes in Firebase Rules.';
+      }
+      return error.message ?? error.code;
+    }
+    return error.toString();
+  }
+
+  Future<void> _loadScaleLogSettings() async {
+    final String? savedDeviceId = await _database.getSetting(_scaleDeviceIdKey);
+    final String scaleDeviceId = (savedDeviceId ?? _defaultScaleDeviceId)
+        .trim();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _scaleBaseUrl = scaleDeviceId;
+      _scaleLogStatus = scaleDeviceId.isEmpty
+          ? 'Scale device not configured'
+          : 'Firebase scale sync ready';
+    });
+    _scaleBaseUrlController.text = scaleDeviceId;
+    _startScaleLogMonitor();
+  }
+
+  void _startScaleLogMonitor() {
+    _scaleLogTimer?.cancel();
+    if (_scaleBaseUrl.trim().isEmpty) {
+      return;
+    }
+    _scaleLogTimer = Timer.periodic(_scaleLogAutoPollInterval, (_) {
+      unawaited(_fetchConfirmedScaleLogs(showProgress: false));
+    });
+    unawaited(_fetchConfirmedScaleLogs(showProgress: false));
+  }
+
+  bool get _scaleLogCanImport {
+    return _scaleBaseUrl.trim().isNotEmpty &&
+        !_isGuestSession &&
+        _screen != AppScreen.walkthrough &&
+        _screen != AppScreen.login &&
+        _screen != AppScreen.createAccount &&
+        _screen != AppScreen.forgotPassword;
+  }
+
+  Future<void> _saveScaleBaseUrl({StateSetter? dialogSetState}) async {
+    final String nextDeviceId = _scaleBaseUrlController.text.trim();
+    await _database.saveSetting(_scaleDeviceIdKey, nextDeviceId);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _scaleBaseUrl = nextDeviceId;
+      _scaleLogStatus = nextDeviceId.isEmpty
+          ? 'Scale device not configured'
+          : 'Firebase scale sync ready';
+    });
+    dialogSetState?.call(() {});
+    _startScaleLogMonitor();
+    _toast(
+      nextDeviceId.isEmpty
+          ? 'Scale Firebase sync disabled.'
+          : 'Scale device sync saved.',
+    );
+  }
+
+  Future<void> _fetchConfirmedScaleLogs({
+    bool showToast = false,
+    bool showProgress = true,
+  }) async {
+    if (_scaleLogSyncRunning || _scaleBaseUrl.trim().isEmpty) {
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    if (!_scaleLogCanImport) {
+      if (showToast) {
+        _toast('Sign in to save confirmed scale logs.');
+      }
+      return;
+    }
+
+    setState(() {
+      _scaleLogSyncRunning = true;
+      if (showProgress) {
+        _scaleLogStatus = 'Checking Firebase scale...';
+      }
+    });
+
+    try {
+      final List<ScaleSaleLog> logs = await _scaleLogService.fetchSales(
+        _scaleBaseUrl,
+      );
+      int imported = 0;
+      final List<ScaleSaleLog> acknowledgedLogs = <ScaleSaleLog>[];
+      for (final ScaleSaleLog log in logs) {
+        final bool saved = await _saveScaleSaleLog(log);
+        if (saved) {
+          imported++;
+        }
+        acknowledgedLogs.add(log);
+      }
+      if (acknowledgedLogs.isNotEmpty) {
+        await _scaleLogService.acknowledgeSales(
+          deviceId: _scaleBaseUrl,
+          sales: acknowledgedLogs,
+        );
+      }
+      if (imported > 0) {
+        await _loadTransactionsFromDatabase();
+        unawaited(_syncTransactionsToFirebase());
+      }
+      if (!mounted) {
+        return;
+      }
+      final DateTime syncedAt = DateTime.now();
+      setState(() {
+        _lastScaleLogSyncAt = syncedAt;
+        if (imported > 0) {
+          _scaleLogStatus =
+              'Imported $imported Firebase scale sale${imported == 1 ? '' : 's'}';
+        } else if (showProgress) {
+          _scaleLogStatus = 'No new Firebase scale sales.';
+        } else if (_scaleLogStatus == 'Checking Firebase scale...' ||
+            _scaleLogStatus == 'Firebase scale sync ready') {
+          _scaleLogStatus = 'Firebase scale sync ready';
+        }
+      });
+      if (showToast) {
+        _toast(
+          imported == 0
+              ? 'No new Firebase scale sales.'
+              : 'Imported $imported Firebase scale sale${imported == 1 ? '' : 's'}.',
+        );
+      }
+    } on ScaleLogException catch (error, stackTrace) {
+      developer.log(
+        'Firebase scale sync failed',
+        name: 'FruityVensScale',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _scaleLogStatus = error.message;
+      });
+      if (showToast) {
+        _toast(error.message);
+      }
+    } catch (error, stackTrace) {
+      developer.log(
+        'Unexpected scale log sync failure',
+        name: 'FruityVensScale',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _scaleLogStatus = 'Firebase scale sync failed.';
+      });
+      if (showToast) {
+        _toast('Firebase scale sync failed: $error');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _scaleLogSyncRunning = false;
+        });
+      } else {
+        _scaleLogSyncRunning = false;
+      }
+    }
+  }
+
+  Future<bool> _saveScaleSaleLog(ScaleSaleLog log) async {
+    final String cloudId = log.cloudId(_scaleBaseUrl);
+    if (await _database.saleExistsByCloudId(cloudId)) {
+      return false;
+    }
+    final int unitPrice = log.pricePerKgCentavos > 0
+        ? log.pricePerKgCentavos
+        : (_inventorySavedPrice(log.fruitName) ??
+              _catalogPriceCentavos(log.fruitName));
+    final int totalPrice = log.priceCentavos > 0
+        ? log.priceCentavos
+        : ((unitPrice * log.weightGrams) / 1000).round();
+    await _database.addSale(
+      cloudId: cloudId,
+      fruitName: log.fruitName,
+      weightGrams: math.max(0, log.weightGrams),
+      unitPrice: math.max(0, unitPrice),
+      totalPrice: math.max(0, totalPrice),
+      soldAt: log.soldAt,
+      status: 'sold',
+    );
+    return true;
+  }
+
   Future<void> _syncWhenInternetReturns() async {
     if (!_cloudSyncEnabled ||
         _cloudSyncRunning ||
@@ -585,6 +989,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             _firebaseSyncService.currentUserId == null)) {
       return;
     }
+    if (_firebaseSyncService.currentUserId != null) {
+      _startFirebaseLiveSync();
+    }
+
     final bool online = await _hasInternetConnection();
     if (!mounted || !online) {
       return;
@@ -624,6 +1032,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       await _syncInventoryToFirebase();
       await _syncTransactionsToFirebase();
       await _pullTransactionsFromFirebase();
+      _startFirebaseLiveSync();
       if (!mounted) {
         return;
       }
@@ -756,9 +1165,15 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     final Set<String> configuredPriceFruits = await _loadConfiguredPriceFruits(
       scanReadyFruits,
     );
+    final Set<String> loadedFruitNames = scanReadyFruits
+        .map((LocalFruit fruit) => fruit.name)
+        .toSet();
     if (!mounted) {
       return;
     }
+    final Set<String> activeInputFruitNames = _isGuestSession
+        ? _scanReadyFruitOrder.toSet()
+        : loadedFruitNames;
     setState(() {
       _managedFruits
         ..clear()
@@ -787,6 +1202,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _configuredPriceFruits
         ..clear()
         ..addAll(configuredPriceFruits);
+      _draftPrices.removeWhere(
+        (String fruit, int _) => !loadedFruitNames.contains(fruit),
+      );
       if (_isGuestSession) {
         _managedFruits
           ..clear()
@@ -808,9 +1226,21 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         _configuredPriceFruits
           ..clear()
           ..addAll(_scanReadyFruitOrder);
+        _draftPrices.clear();
       }
       _inventoryLoading = false;
     });
+    _disposePriceInputsExcept(activeInputFruitNames);
+  }
+
+  void _disposePriceInputsExcept(Set<String> activeFruits) {
+    final List<String> staleInputs = _priceInputControllers.keys
+        .where((String fruit) => !activeFruits.contains(fruit))
+        .toList();
+    for (final String fruit in staleInputs) {
+      _priceInputControllers.remove(fruit)?.dispose();
+      _priceInputFocusNodes.remove(fruit)?.dispose();
+    }
   }
 
   Future<Set<String>> _loadConfiguredPriceFruits(
@@ -852,6 +1282,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _formatTime(sale.soldAt),
       _displayStatus(sale.status),
       soldAt: sale.soldAt,
+      saleId: sale.id,
+      cloudId: sale.cloudId,
     );
   }
 
@@ -870,7 +1302,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     final DateTime now = DateTime.now();
     final List<TransactionData> soldTransactions = _activeTransactionHistory
         .where((TransactionData transaction) {
-          if (transaction.status == 'Cancelled') {
+          if (!_isSoldTransaction(transaction)) {
             return false;
           }
           return _isGuestSession ||
@@ -977,6 +1409,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     return _inventoryPriceIsConfigured(fruit) ? _prices[fruit] : null;
   }
 
+  int _editablePriceFor(String fruit) {
+    return _draftPrices[fruit] ?? _prices[fruit] ?? 0;
+  }
+
   TextEditingController _priceInputControllerFor(String fruit) {
     final TextEditingController controller = _priceInputControllers.putIfAbsent(
       fruit,
@@ -984,7 +1420,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     );
     final FocusNode? focusNode = _priceInputFocusNodes[fruit];
     if (!(focusNode?.hasFocus ?? false)) {
-      final String expected = _priceInputFromCentavos(_prices[fruit] ?? 0);
+      final String expected = _priceInputFromCentavos(_editablePriceFor(fruit));
       if (controller.text != expected) {
         controller.value = TextEditingValue(
           text: expected,
@@ -1004,7 +1440,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     if (controller == null) {
       return;
     }
-    final String text = _priceInputFromCentavos(_prices[fruit] ?? 0);
+    final String text = _priceInputFromCentavos(_editablePriceFor(fruit));
     controller.value = TextEditingValue(
       text: text,
       selection: TextSelection.collapsed(offset: text.length),
@@ -1344,7 +1780,18 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
     final List<Map<String, Object?>> cloudInventory = await _firebaseSyncService
         .fetchInventory();
-    if (cloudInventory.isEmpty) {
+    await _applyCloudInventoryFromFirebase(cloudInventory);
+  }
+
+  Future<void> _applyCloudInventoryFromFirebase(
+    List<Map<String, Object?>> cloudInventory, {
+    bool fromLiveSync = false,
+    String? liveSyncUserId,
+    int? liveSyncGeneration,
+  }) async {
+    if (!_canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration) ||
+        _isGuestSession ||
+        cloudInventory.isEmpty) {
       return;
     }
 
@@ -1359,6 +1806,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       final FruitInfo info = _catalog[name]!;
       final int cloudPrice = _priceCentavosFromCloud(fruit);
       final LocalFruit? localFruit = await _database.getManagedFruit(name);
+      if (!_canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration)) {
+        return;
+      }
       if (localFruit != null &&
           localFruit.dirty &&
           localFruit.price != cloudPrice) {
@@ -1387,8 +1837,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           oldPrice: localFruit.price,
           newPrice: cloudPrice,
           source: 'cloud',
-          note: 'Synced from Firebase.',
+          note: fromLiveSync
+              ? 'Updated automatically from Firebase.'
+              : 'Synced from Firebase.',
         );
+      }
+      if (!_canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration)) {
+        return;
       }
       await _database.saveManagedFruitFromCloud(
         name: name,
@@ -1401,8 +1856,21 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         await _database.saveSetting(_inventoryPriceConfiguredKey(name), '1');
       }
     }
+    if (!_canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration)) {
+      return;
+    }
     await _loadInventoryFromDatabase();
     await _loadPriceHistoryFromDatabase();
+    if (mounted &&
+        fromLiveSync &&
+        _canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration)) {
+      setState(() {
+        _emailPasswordProviderBlocked = false;
+        _cloudSyncStatus = _priceConflictFruits.isEmpty
+            ? 'Synced with Firebase'
+            : 'Price conflict needs review';
+      });
+    }
   }
 
   Future<void> _pullTransactionsFromFirebase() async {
@@ -1414,13 +1882,40 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
     final List<Map<String, Object?>> cloudTransactions =
         await _firebaseSyncService.fetchTransactions();
-    if (cloudTransactions.isEmpty) {
+    await _applyCloudTransactionsFromFirebase(cloudTransactions);
+  }
+
+  Future<void> _applyCloudTransactionsFromFirebase(
+    List<Map<String, Object?>> cloudTransactions, {
+    bool fromLiveSync = false,
+    String? liveSyncUserId,
+    int? liveSyncGeneration,
+  }) async {
+    if (!_canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration) ||
+        _isGuestSession ||
+        cloudTransactions.isEmpty) {
       return;
     }
     for (final Map<String, Object?> transaction in cloudTransactions) {
+      if (!_canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration)) {
+        return;
+      }
       await _database.saveSaleFromCloud(transaction);
     }
+    if (!_canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration)) {
+      return;
+    }
     await _loadTransactionsFromDatabase();
+    if (mounted &&
+        fromLiveSync &&
+        _canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration)) {
+      setState(() {
+        _emailPasswordProviderBlocked = false;
+        _cloudSyncStatus = _priceConflictFruits.isEmpty
+            ? 'Synced with Firebase'
+            : 'Price conflict needs review';
+      });
+    }
   }
 
   Future<void> _registerCurrentDeviceWithFirebase() async {
@@ -1807,6 +2302,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       return;
     }
     fruityVensMessengerKey.currentState?.hideCurrentSnackBar();
+    _stopFirebaseLiveSync();
     final String? deviceId = _deviceId;
     if (!mounted) {
       return;
@@ -2009,6 +2505,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         _firebaseSyncService.currentUserId == null) {
       return;
     }
+    if (_firebaseSyncService.currentUserId != null) {
+      _startFirebaseLiveSync();
+    }
 
     try {
       final FirebaseAccount? cloudAccount = await _firebaseSyncService
@@ -2033,6 +2532,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       await _syncInventoryToFirebase();
       await _syncTransactionsToFirebase();
       await _pullTransactionsFromFirebase();
+      _startFirebaseLiveSync();
     } on FirebaseSyncException catch (error, stackTrace) {
       _logCloudSyncIssue(
         'Local account cloud refresh failed',
@@ -2687,6 +3187,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   }
 
   void _continueAsGuest() {
+    _stopFirebaseLiveSync();
     unawaited(_database.saveSetting(_walkthroughSeenKey, 'true'));
     setState(() {
       _isGuestSession = true;
@@ -3226,14 +3727,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _showFullAccessRequired('Pricing');
       return;
     }
-    setState(() {
-      final int currentPrice = _prices[fruit] ?? 0;
-      if (currentPrice <= 0 && delta < 0) {
-        _prices[fruit] = 0;
-        return;
-      }
-      _prices[fruit] = math.max(0, currentPrice + delta);
-    });
+    final int currentPrice = _editablePriceFor(fruit);
+    _draftPrices[fruit] = currentPrice <= 0 && delta < 0
+        ? 0
+        : math.max(0, currentPrice + delta);
     _syncPriceInputController(fruit);
   }
 
@@ -3242,18 +3739,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       return;
     }
     if (value.trim().isEmpty) {
-      setState(() {
-        _prices[fruit] = 0;
-      });
+      _draftPrices[fruit] = 0;
       return;
     }
     final int? parsed = _parsePriceInputCentavos(value);
     if (parsed == null) {
       return;
     }
-    setState(() {
-      _prices[fruit] = parsed;
-    });
+    _draftPrices[fruit] = parsed;
   }
 
   Future<void> _saveInventoryFruit(String fruit) async {
@@ -3261,7 +3754,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _showFullAccessRequired('Pricing');
       return;
     }
-    final int price = _prices[fruit] ?? 0;
+    final int price = _editablePriceFor(fruit);
     if (price <= 0) {
       _toast('Set $fruit price per kg first.');
       return;
@@ -3276,6 +3769,18 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     if (!confirmed) {
       return;
     }
+    final bool wasConfigured = _configuredPriceFruits.contains(fruit);
+    final bool hasPriceConflict = _priceConflictFruits.contains(fruit);
+    if (existingFruit != null &&
+        oldPrice == price &&
+        !existingFruit.dirty &&
+        wasConfigured &&
+        !hasPriceConflict) {
+      _draftPrices.remove(fruit);
+      _syncPriceInputController(fruit);
+      _toast('$fruit is already saved at ${money(price)}/kg.');
+      return;
+    }
     final int preservedStock = _stocks[fruit] ?? 0;
     final _RestockSignal signal = _restockSignalForFruit(fruit);
     await _database.updateFruitInventory(
@@ -3286,6 +3791,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     await _database.saveSetting(_inventoryPriceConfiguredKey(fruit), '1');
     if (mounted) {
       setState(() {
+        _prices[fruit] = price;
+        _draftPrices.remove(fruit);
         _configuredPriceFruits.add(fruit);
         _priceConflictFruits.remove(fruit);
         if (_priceConflictNotice?.startsWith('$fruit ') ?? false) {
@@ -3316,7 +3823,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       return;
     }
     if (!_scanReadyFruits.contains(fruit)) {
-      _toast('$fruit is not available for scanning yet.');
+      _toast('$fruit is not in the fruit catalog.');
       return;
     }
 
@@ -3342,6 +3849,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         _managedFruits.add(fruit);
       }
       _prices[fruit] = savedPrice;
+      _draftPrices.remove(fruit);
       _stocks[fruit] = savedStock;
       _configuredPriceFruits.add(fruit);
       _fruitToAdd = null;
@@ -3361,7 +3869,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       oldPrice: 0,
       newPrice: savedPrice,
       source: 'local',
-      note: 'Added scan-ready fruit.',
+      note: 'Added catalog fruit.',
     );
     await _loadInventoryFromDatabase();
     await _loadPriceHistoryFromDatabase();
@@ -3383,6 +3891,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         _expandedInventoryFruit = null;
       }
       _configuredPriceFruits.remove(fruit);
+      _draftPrices.remove(fruit);
     });
     _priceInputControllers.remove(fruit)?.dispose();
     _priceInputFocusNodes.remove(fruit)?.dispose();
@@ -3425,71 +3934,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     }
   }
 
-  Future<PermissionStatus> _requestPermissionWhenNeeded(
-    Permission permission,
-  ) async {
-    final PermissionStatus status = await permission.status;
-    if (status.isGranted ||
-        status.isLimited ||
-        status.isPermanentlyDenied ||
-        status.isRestricted) {
-      return status;
-    }
-    return permission.request();
-  }
-
-  Future<bool> _requestCameraNetworkAccess({bool showToast = true}) async {
-    if (!Platform.isAndroid) {
-      return true;
-    }
-
-    try {
-      final PermissionStatus wifiStatus = await _requestPermissionWhenNeeded(
-        Permission.nearbyWifiDevices,
-      );
-      final PermissionStatus locationStatus =
-          await _requestPermissionWhenNeeded(Permission.locationWhenInUse);
-      final bool granted = wifiStatus.isGranted || locationStatus.isGranted;
-      if (granted) {
-        return true;
-      }
-      if (wifiStatus.isPermanentlyDenied ||
-          locationStatus.isPermanentlyDenied) {
-        if (showToast) {
-          _toast(
-            'Nearby Wi-Fi permission is disabled. Enable it to connect the camera AP.',
-            actionLabel: 'Settings',
-            onAction: openAppSettings,
-          );
-        }
-        return false;
-      }
-      if (showToast) {
-        _toast(
-          'Nearby Wi-Fi permission is needed to connect the ESP32-CAM AP.',
-        );
-      }
-      return false;
-    } on MissingPluginException {
-      return true;
-    }
-  }
-
   Future<void> _connectCameraEye({bool showToast = true}) async {
     if (_cameraEyeBusy) {
-      return;
-    }
-    final bool hasAccess = await _requestCameraNetworkAccess(
-      showToast: showToast,
-    );
-    if (!hasAccess || !mounted) {
-      if (!showToast && mounted) {
-        setState(() {
-          _cameraEyeStatus = const CameraEyeStatus.error(
-            'Nearby Wi-Fi permission is needed to connect the ESP32-CAM AP.',
-          );
-        });
-      }
       return;
     }
 
@@ -3664,7 +4110,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         ReportMetric('Camera', _cameraEyeStateLabel, 'Fruit scanning'),
       ],
       inventory: _managedFruits.map((String fruit) {
-        final _RestockSignal signal = _restockSignalForFruit(fruit);
+        final _RestockSignal signal = _restockSignalForFruit(
+          fruit,
+          stats: stats,
+        );
         return ReportFruit(
           name: fruit,
           pricePerKg: _inventoryPriceIsConfigured(fruit)
@@ -3702,7 +4151,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           analytics.averageLabel,
         ),
       ],
-      transactions: _activeTransactionHistory.map((
+      transactions: _visibleTransactionHistory.map((
         TransactionData transaction,
       ) {
         return ReportTransaction(
@@ -3728,7 +4177,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       ];
     }
     return stats.topFruitRanks.map((FruitRank rank) {
-      final _RestockSignal signal = _restockSignalForFruit(rank.name);
+      final _RestockSignal signal = _restockSignalForFruit(
+        rank.name,
+        stats: stats,
+      );
       return ReportForecastRow(
         name: rank.name,
         value: '${rank.weightLabel} sold today',
@@ -3806,7 +4258,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               'processingModelId': _fruitDetectionModel.id,
               'processingModelAsset': _fruitDetectionModel.assetPath,
               'deviceTier': _deviceTierName,
-              'mode': 'backend-only stream source; no live preview in app',
+              'mode': 'LAN snapshot preview through ESP32-CAM',
             },
           );
       if (!mounted) {
@@ -3871,9 +4323,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     );
   }
 
-  _RestockSignal _restockSignalForFruit(String fruit) {
-    final List<FruitRank> ranks = _dashboardStats().topFruitRanks;
+  _RestockSignal _restockSignalForFruit(String fruit, {DashboardStats? stats}) {
+    final List<FruitRank> ranks = (stats ?? _dashboardStats()).topFruitRanks;
     final int index = ranks.indexWhere((FruitRank rank) => rank.name == fruit);
+    return _restockSignalForRankIndex(index);
+  }
+
+  _RestockSignal _restockSignalForRankIndex(int index) {
     if (index == 0) {
       return const _RestockSignal(
         label: 'Heavy restock',
@@ -3992,47 +4448,50 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         }
       },
       child: Scaffold(
-        body: Stack(
-          children: <Widget>[
-            SafeArea(
-              child: LayoutBuilder(
-                builder: (BuildContext context, BoxConstraints constraints) {
-                  return Align(
-                    alignment: Alignment.topCenter,
-                    child: SizedBox(
-                      width: math.min(920, constraints.maxWidth),
-                      height: constraints.maxHeight,
-                      child: _screenShell(),
-                    ),
-                  );
-                },
-              ),
-            ),
-            if (_screen != AppScreen.walkthrough &&
-                _screen != AppScreen.login &&
-                _screen != AppScreen.createAccount &&
-                _screen != AppScreen.forgotPassword)
-              _operationsSidePanelOverlay(),
-            if (_phoneUnlockGateVisible)
-              Positioned.fill(
-                child: _PhoneUnlockGate(
-                  email: _activePhoneLinkEmail,
-                  biometricsEnabled: _biometricAutoLoginEnabled,
+        resizeToAvoidBottomInset: false,
+        body: _KeyboardStableViewport(
+          child: Stack(
+            children: <Widget>[
+              SafeArea(
+                child: LayoutBuilder(
+                  builder: (BuildContext context, BoxConstraints constraints) {
+                    return Align(
+                      alignment: Alignment.topCenter,
+                      child: SizedBox(
+                        width: math.min(920, constraints.maxWidth),
+                        height: constraints.maxHeight,
+                        child: _screenShell(),
+                      ),
+                    );
+                  },
                 ),
               ),
-            if (_splashMounted)
-              Positioned.fill(
-                child: IgnorePointer(
-                  ignoring: !_splashVisible,
-                  child: AnimatedOpacity(
-                    opacity: _splashVisible ? 1 : 0,
-                    duration: const Duration(milliseconds: 420),
-                    curve: Curves.easeOutCubic,
-                    child: const FloatingGlassSplash(),
+              if (_screen != AppScreen.walkthrough &&
+                  _screen != AppScreen.login &&
+                  _screen != AppScreen.createAccount &&
+                  _screen != AppScreen.forgotPassword)
+                _operationsSidePanelOverlay(),
+              if (_phoneUnlockGateVisible)
+                Positioned.fill(
+                  child: _PhoneUnlockGate(
+                    email: _activePhoneLinkEmail,
+                    biometricsEnabled: _biometricAutoLoginEnabled,
                   ),
                 ),
-              ),
-          ],
+              if (_splashMounted)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    ignoring: !_splashVisible,
+                    child: AnimatedOpacity(
+                      opacity: _splashVisible ? 1 : 0,
+                      duration: const Duration(milliseconds: 420),
+                      curve: Curves.easeOutCubic,
+                      child: const FloatingGlassSplash(),
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -5418,6 +5877,118 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       for (final FruitDetectionModel model
                           in FruitDetectionService.builtInModels)
                         modelTile(model),
+                      const Divider(color: AppColors.borderSoft, height: 28),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Container(
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: AppColors.palm.withValues(alpha: 0.14),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Icon(
+                              Icons.scale_rounded,
+                              color: AppColors.greenText,
+                              size: 20,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                Row(
+                                  children: <Widget>[
+                                    const Expanded(
+                                      child: Text(
+                                        'Firebase scale sync',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                    ),
+                                    if (_scaleLogSyncRunning)
+                                      StatusBadge.blue('CHECKING')
+                                    else if (_scaleBaseUrl.isEmpty)
+                                      const StatusBadge.orange('OFF')
+                                    else
+                                      const StatusBadge.green('ON'),
+                                  ],
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  _scaleLogStatus,
+                                  style: const TextStyle(
+                                    color: AppColors.textSecondary,
+                                    fontSize: 12,
+                                    height: 1.35,
+                                  ),
+                                ),
+                                if (_lastScaleLogSyncAt != null) ...<Widget>[
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Last checked ${_formatTime(_lastScaleLogSyncAt!)}',
+                                    style: const TextStyle(
+                                      color: AppColors.textMuted,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      AppTextField(
+                        controller: _scaleBaseUrlController,
+                        label: 'Scale device ID',
+                        hint: 'fruityvens-scale-01',
+                        keyboardType: TextInputType.text,
+                        prefixIcon: Icons.badge_rounded,
+                        textInputAction: TextInputAction.done,
+                        onSubmitted: (_) => unawaited(
+                          _saveScaleBaseUrl(dialogSetState: setDialogState),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: GhostButton(
+                              label: 'Save',
+                              icon: Icons.save_rounded,
+                              onPressed: () => unawaited(
+                                _saveScaleBaseUrl(
+                                  dialogSetState: setDialogState,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: GhostButton(
+                              label: 'Fetch Firebase',
+                              icon: Icons.sync_rounded,
+                              highlighted: true,
+                              onPressed: _scaleLogSyncRunning
+                                  ? null
+                                  : () => unawaited(
+                                      _fetchConfirmedScaleLogs(
+                                        showToast: true,
+                                      ).then((_) {
+                                        if (mounted) {
+                                          setDialogState(() {});
+                                        }
+                                      }),
+                                    ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -5524,14 +6095,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           ],
         ),
         const SizedBox(height: 10),
-        if (_activeTransactionHistory.isEmpty)
+        if (_visibleTransactionHistory.isEmpty)
           _emptyStateCard(
             icon: Icons.receipt_long_rounded,
             title: 'No sales yet',
             detail: 'Sales will appear here.',
           )
         else
-          ..._activeTransactionHistory.take(5).map((
+          ..._visibleTransactionHistory.take(5).map((
             TransactionData transaction,
           ) {
             return HistoryTransactionCard(transaction: transaction);
@@ -5587,17 +6158,270 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     );
   }
 
+  Future<void> _showTransactionActions(TransactionData transaction) async {
+    if (_isGuestSession) {
+      _showFullAccessRequired('History changes');
+      return;
+    }
+    if (transaction.saleId == null) {
+      _toast('This sale cannot be edited on this phone.');
+      return;
+    }
+
+    final bool cancelled = transaction.status == 'Cancelled';
+    final _TransactionHistoryAction?
+    action = await showModalBottomSheet<_TransactionHistoryAction>(
+      context: context,
+      backgroundColor: AppColors.bgCard,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+      ),
+      builder: (BuildContext sheetContext) {
+        return SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    const Expanded(child: SectionTitle('Manage sale')),
+                    IconButton(
+                      tooltip: 'Close',
+                      onPressed: () => Navigator.of(sheetContext).pop(),
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+                Text(
+                  '${transaction.fruit} - ${transaction.weight} - ${transaction.price}',
+                  style: const TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                ListTile(
+                  leading: Icon(
+                    cancelled ? Icons.restore_rounded : Icons.cancel_outlined,
+                    color: cancelled
+                        ? AppColors.greenText
+                        : AppColors.orangeText,
+                  ),
+                  title: Text(cancelled ? 'Restore sale' : 'Cancel sale'),
+                  subtitle: Text(
+                    cancelled
+                        ? 'Count this sale in analytics and restock signals again.'
+                        : 'Keep it visible as Void, but exclude it from analytics and restock signals.',
+                  ),
+                  onTap: () => Navigator.of(sheetContext).pop(
+                    cancelled
+                        ? _TransactionHistoryAction.restore
+                        : _TransactionHistoryAction.cancel,
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(
+                    Icons.delete_outline_rounded,
+                    color: AppColors.pinkText,
+                  ),
+                  title: const Text('Remove from history'),
+                  subtitle: const Text(
+                    'Hide this sale from history, reports, analytics, and forecasts.',
+                  ),
+                  onTap: () => Navigator.of(
+                    sheetContext,
+                  ).pop(_TransactionHistoryAction.remove),
+                ),
+                ListTile(
+                  leading: const Icon(
+                    Icons.check_circle_outline_rounded,
+                    color: AppColors.textSecondary,
+                  ),
+                  title: Text(cancelled ? 'Keep as void' : 'Keep sale'),
+                  subtitle: const Text('Leave this transaction unchanged.'),
+                  onTap: () => Navigator.of(
+                    sheetContext,
+                  ).pop(_TransactionHistoryAction.keep),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    switch (action) {
+      case _TransactionHistoryAction.cancel:
+        await _updateTransactionStatus(
+          transaction,
+          status: 'cancelled',
+          successMessage:
+              '${transaction.fruit} sale marked void. Analytics updated.',
+        );
+        return;
+      case _TransactionHistoryAction.restore:
+        await _updateTransactionStatus(
+          transaction,
+          status: 'sold',
+          successMessage: '${transaction.fruit} sale restored.',
+        );
+        return;
+      case _TransactionHistoryAction.remove:
+        final bool confirmed = await _confirmRemoveTransaction(transaction);
+        if (!confirmed) {
+          return;
+        }
+        await _updateTransactionStatus(
+          transaction,
+          status: 'removed',
+          successMessage: '${transaction.fruit} sale removed from history.',
+        );
+        return;
+      case _TransactionHistoryAction.keep:
+      case null:
+        return;
+    }
+  }
+
+  Future<bool> _confirmRemoveTransaction(TransactionData transaction) async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          backgroundColor: AppColors.bgCard,
+          title: const Text('Remove sale?'),
+          content: Text(
+            'This hides ${transaction.fruit} from history, analytics, forecasts, and reports. A removed sync record is kept so cloud sync will not add it back.',
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 13,
+              height: 1.4,
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Keep'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: AppColors.pink,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Remove'),
+            ),
+          ],
+        );
+      },
+    );
+    return confirmed ?? false;
+  }
+
+  Future<void> _updateTransactionStatus(
+    TransactionData transaction, {
+    required String status,
+    required String successMessage,
+  }) async {
+    final int? saleId = transaction.saleId;
+    if (saleId == null) {
+      _toast('This sale cannot be edited on this phone.');
+      return;
+    }
+    await _database.updateSaleStatus(id: saleId, status: status);
+    await _loadTransactionsFromDatabase();
+    unawaited(_syncTransactionsToFirebase());
+    if (!mounted) {
+      return;
+    }
+    _toast(successMessage);
+  }
+
+  DateTime get _historyFirstSelectableDate {
+    final DateTime today = _historyDateOnly(DateTime.now());
+    DateTime earliest = today;
+    for (final TransactionData transaction in _visibleTransactionHistory) {
+      final DateTime? day = _transactionHistoryDay(transaction);
+      if (day != null && day.isBefore(earliest)) {
+        earliest = day;
+      }
+    }
+    return earliest;
+  }
+
+  DateTime get _historyLastSelectableDate {
+    DateTime latest = _historyDateOnly(DateTime.now());
+    for (final TransactionData transaction in _visibleTransactionHistory) {
+      final DateTime? day = _transactionHistoryDay(transaction);
+      if (day != null && day.isAfter(latest)) {
+        latest = day;
+      }
+    }
+    return latest;
+  }
+
+  DateTime _clampedHistoryDate(DateTime date) {
+    final DateTime day = _historyDateOnly(date);
+    final DateTime firstDate = _historyFirstSelectableDate;
+    final DateTime lastDate = _historyLastSelectableDate;
+    if (day.isBefore(firstDate)) {
+      return firstDate;
+    }
+    if (day.isAfter(lastDate)) {
+      return lastDate;
+    }
+    return day;
+  }
+
+  Future<void> _pickHistoryDate() async {
+    final DateTime firstDate = _historyFirstSelectableDate;
+    final DateTime lastDate = _historyLastSelectableDate;
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: _clampedHistoryDate(_selectedHistoryDate),
+      firstDate: firstDate,
+      lastDate: lastDate,
+      helpText: 'Select history date',
+    );
+    if (picked == null || !mounted) {
+      return;
+    }
+    setState(() {
+      _selectedHistoryDate = _historyDateOnly(picked);
+    });
+  }
+
+  void _showTodayHistory() {
+    final DateTime today = _historyDateOnly(DateTime.now());
+    if (_isSameDay(_selectedHistoryDate, today)) {
+      return;
+    }
+    setState(() {
+      _selectedHistoryDate = today;
+    });
+  }
+
   Widget _transactionHistoryScreen() {
-    final List<TransactionData> transactions = _activeTransactionHistory;
-    final int sold = transactions
-        .where((TransactionData item) => item.status != 'Cancelled')
+    final DateTime selectedDate = _selectedHistoryDate;
+    final bool selectedToday = _isSameDay(selectedDate, DateTime.now());
+    final String dateLabel = selectedToday
+        ? 'Today'
+        : _formatDate(selectedDate);
+    final List<TransactionData> transactions = _selectedHistoryDateTransactions;
+    final int sold = transactions.where(_isSoldTransaction).length;
+    final int cancelled = transactions
+        .where((TransactionData item) => item.status == 'Cancelled')
         .length;
-    final int cancelled = transactions.length - sold;
     final int salesTotal = transactions.fold<int>(0, (
       int sum,
       TransactionData transaction,
     ) {
-      if (transaction.status == 'Cancelled') {
+      if (!_isSoldTransaction(transaction)) {
         return sum;
       }
       return sum + _parsePesoAmount(transaction.price);
@@ -5628,14 +6452,22 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    const Text(
-                      'Today',
-                      style: TextStyle(
+                    Text(
+                      dateLabel,
+                      style: const TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 2),
+                    Text(
+                      _formatDate(selectedDate),
+                      style: const TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
                     Wrap(
                       spacing: 7,
                       runSpacing: 6,
@@ -5648,6 +6480,38 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   ],
                 ),
               ),
+              IconButton(
+                tooltip: 'Pick history date',
+                constraints: const BoxConstraints.tightFor(
+                  width: 36,
+                  height: 36,
+                ),
+                padding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+                onPressed: () => unawaited(_pickHistoryDate()),
+                icon: const Icon(
+                  Icons.calendar_month_rounded,
+                  color: AppColors.textSecondary,
+                  size: 20,
+                ),
+              ),
+              if (!selectedToday)
+                IconButton(
+                  tooltip: 'Show today',
+                  constraints: const BoxConstraints.tightFor(
+                    width: 36,
+                    height: 36,
+                  ),
+                  padding: EdgeInsets.zero,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: _showTodayHistory,
+                  icon: const Icon(
+                    Icons.today_rounded,
+                    color: AppColors.orangeText,
+                    size: 20,
+                  ),
+                ),
+              const SizedBox(width: 6),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: <Widget>[
@@ -5679,11 +6543,18 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   _emptyStateCard(
                     icon: Icons.receipt_long_rounded,
                     title: 'No transaction records',
-                    detail: 'Sales history will appear here.',
+                    detail: selectedToday
+                        ? 'No sales recorded today.'
+                        : 'No sales recorded on ${_formatDate(selectedDate)}.',
                   ),
                 ]
               : transactions.map((TransactionData transaction) {
-                  return HistoryTransactionCard(transaction: transaction);
+                  return HistoryTransactionCard(
+                    transaction: transaction,
+                    onManage: _isGuestSession || transaction.saleId == null
+                        ? null
+                        : () => unawaited(_showTransactionActions(transaction)),
+                  );
                 }).toList(),
         ),
       ],
@@ -5764,7 +6635,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   fruit: info,
                   price: _prices[fruit] ?? 0,
                   priceConfigured: _inventoryPriceIsConfigured(fruit),
-                  restockSignal: _restockSignalForFruit(fruit),
+                  restockSignal: _restockSignalForFruit(fruit, stats: stats),
                   expanded: expanded,
                   readOnly: _isGuestSession,
                   priceController: _priceInputControllerFor(fruit),
@@ -5817,7 +6688,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               const SizedBox(width: 10),
               const Expanded(
                 child: Text(
-                  'Choose the scan-ready fruits this vendor sells, then set the price per kg.',
+                  'Choose the fruits this vendor sells, including Philippine tropical options, then set the price per kg.',
                   style: TextStyle(
                     color: AppColors.textSecondary,
                     fontSize: 12,
@@ -6053,7 +6924,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     const Text(
-                      'Scan-ready pricing',
+                      'Catalog pricing',
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w900,
@@ -6089,7 +6960,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     width: _tileWidth(constraints.maxWidth, wide ? 3 : 1, 8),
                     icon: Icons.shopping_basket_rounded,
                     label: 'Active fruits',
-                    value: '${_managedFruits.length}/5',
+                    value:
+                        '${_managedFruits.length}/${_scanReadyFruitOrder.length}',
                   ),
                   _inventoryMetricTile(
                     width: _tileWidth(constraints.maxWidth, wide ? 3 : 1, 8),
@@ -6267,7 +7139,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   }
 
   Widget _inventoryRestockRow(FruitRank rank, int position) {
-    final _RestockSignal signal = _restockSignalForFruit(rank.name);
+    final _RestockSignal signal = _restockSignalForRankIndex(position - 1);
     final FruitInfo? info = _catalog[rank.name];
     final Color rankColor = switch (position) {
       1 => const Color(0xFFFFD54F),
@@ -6501,6 +7373,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             Animation<double> secondaryAnimation,
           ) {
             String? panelNotice;
+            bool previewOpen = false;
             return StatefulBuilder(
               builder: (BuildContext context, StateSetter setDialogState) {
                 Future<void> runCameraAction(
@@ -6607,7 +7480,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                       runSpacing: 8,
                                       children: <Widget>[
                                         StatusBadge.blue(
-                                          'SSID ${CameraEyeService.ssid}',
+                                          'Host ${CameraEyeService.host}',
                                         ),
                                         StatusBadge.blue(
                                           'Current ${_cameraEyeStatus.currentSsid}',
@@ -6635,11 +7508,16 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                         crossAxisAlignment:
                                             CrossAxisAlignment.start,
                                         children: <Widget>[
-                                          const SectionLabel('AI stream route'),
+                                          const SectionLabel('Camera route'),
                                           const SizedBox(height: 8),
                                           _cameraInfoRow(
-                                            'Stream',
-                                            _cameraEyeStatus.streamUrl,
+                                            'Host',
+                                            CameraEyeService.baseUrl,
+                                          ),
+                                          const SizedBox(height: 6),
+                                          _cameraInfoRow(
+                                            'Snapshot',
+                                            _cameraEyeStatus.snapshotUrl,
                                           ),
                                           const SizedBox(height: 6),
                                           _cameraInfoRow(
@@ -6675,14 +7553,25 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                         ),
                                         borderRadius: BorderRadius.circular(8),
                                       ),
-                                      child: const Text(
-                                        'Live preview will be added once the camera stream is stable. For now, the app checks the ESP32-CAM route and sends its status into AI forecasting.',
-                                        style: TextStyle(
-                                          color: AppColors.textSecondary,
-                                          fontSize: 12,
-                                          height: 1.35,
-                                        ),
-                                      ),
+                                      child: previewOpen
+                                          ? _CameraEyeSnapshotPreview(
+                                              service: _cameraEyeService,
+                                              onNotice: (String message) {
+                                                if (dialogContext.mounted) {
+                                                  setDialogState(() {
+                                                    panelNotice = message;
+                                                  });
+                                                }
+                                              },
+                                            )
+                                          : const Text(
+                                              'Preview pulls camera snapshots from the ESP32-CAM while preview or scale detection is active. When detection finishes, the camera returns to idle.',
+                                              style: TextStyle(
+                                                color: AppColors.textSecondary,
+                                                fontSize: 12,
+                                                height: 1.35,
+                                              ),
+                                            ),
                                     ),
                                     if (panelNotice != null) ...<Widget>[
                                       const SizedBox(height: 12),
@@ -6777,6 +7666,24 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                                     showToast: false,
                                                   ),
                                                 ),
+                                        ),
+                                        GhostButton(
+                                          label: previewOpen
+                                              ? 'Hide preview'
+                                              : 'Preview',
+                                          icon: previewOpen
+                                              ? Icons.visibility_off_rounded
+                                              : Icons.visibility_rounded,
+                                          onPressed: _cameraEyeBusy
+                                              ? null
+                                              : () {
+                                                  setDialogState(() {
+                                                    previewOpen = !previewOpen;
+                                                    panelNotice = previewOpen
+                                                        ? 'Opening ESP32-CAM preview...'
+                                                        : 'Camera preview closed.';
+                                                  });
+                                                },
                                         ),
                                         GhostButton(
                                           label: 'Release',
@@ -7029,7 +7936,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     int analyzedCount = 0;
 
     for (final TransactionData transaction in _activeTransactionHistory) {
-      if (transaction.status == 'Cancelled' ||
+      if (!_isSoldTransaction(transaction) ||
           !_scanReadyFruits.contains(transaction.fruit)) {
         continue;
       }
@@ -7240,7 +8147,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     final List<_AnalyticsSale> sales = <_AnalyticsSale>[];
     for (int index = 0; index < _activeTransactionHistory.length; index++) {
       final TransactionData transaction = _activeTransactionHistory[index];
-      if (transaction.status == 'Cancelled') {
+      if (!_isSoldTransaction(transaction)) {
         continue;
       }
       DateTime? soldAt = transaction.soldAt;
@@ -8250,6 +9157,133 @@ class AppColors {
   ];
 }
 
+class _CameraEyeSnapshotPreview extends StatefulWidget {
+  const _CameraEyeSnapshotPreview({
+    required this.service,
+    required this.onNotice,
+  });
+
+  final CameraEyeService service;
+  final ValueChanged<String> onNotice;
+
+  @override
+  State<_CameraEyeSnapshotPreview> createState() =>
+      _CameraEyeSnapshotPreviewState();
+}
+
+class _CameraEyeSnapshotPreviewState extends State<_CameraEyeSnapshotPreview> {
+  Timer? _timer;
+  Uint8List? _imageBytes;
+  String _message = 'Starting ESP32-CAM preview...';
+  bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_startPreview());
+  }
+
+  Future<void> _startPreview() async {
+    try {
+      await widget.service.startPreview();
+      if (!mounted) {
+        return;
+      }
+      widget.onNotice('ESP32-CAM preview started.');
+      setState(() {
+        _message = 'Live snapshot preview';
+      });
+      await _loadFrame();
+      _timer = Timer.periodic(
+        const Duration(milliseconds: 900),
+        (_) => _loadFrame(),
+      );
+    } on CameraEyeException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      widget.onNotice(error.message);
+      setState(() {
+        _message = error.message;
+      });
+    }
+  }
+
+  Future<void> _loadFrame() async {
+    if (_loading) {
+      return;
+    }
+    _loading = true;
+    try {
+      final Uint8List bytes = await widget.service.fetchSnapshot();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _imageBytes = bytes;
+        _message = 'Live snapshot preview';
+      });
+    } on CameraEyeException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _message = error.message;
+      });
+    } finally {
+      _loading = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    unawaited(widget.service.stopPreview());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Uint8List? bytes = _imageBytes;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: AspectRatio(
+            aspectRatio: 4 / 3,
+            child: Container(
+              color: Colors.black,
+              alignment: Alignment.center,
+              child: bytes == null
+                  ? const CircularProgressIndicator(
+                      color: AppColors.orangeText,
+                      strokeWidth: 2,
+                    )
+                  : Image.memory(
+                      bytes,
+                      fit: BoxFit.contain,
+                      gaplessPlayback: true,
+                      width: double.infinity,
+                      height: double.infinity,
+                    ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          _message,
+          style: const TextStyle(
+            color: AppColors.textSecondary,
+            fontSize: 12,
+            height: 1.35,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _WalkthroughStep {
   const _WalkthroughStep({
     required this.icon,
@@ -8291,6 +9325,8 @@ class TransactionData {
     this.time,
     this.status, {
     this.soldAt,
+    this.saleId,
+    this.cloudId,
   });
 
   final String fruit;
@@ -8300,6 +9336,8 @@ class TransactionData {
   final String time;
   final String status;
   final DateTime? soldAt;
+  final int? saleId;
+  final String? cloudId;
 }
 
 class DashboardStats {
@@ -8462,6 +9500,21 @@ class _RestockSignal {
   final Widget badge;
 }
 
+class _KeyboardStableViewport extends StatelessWidget {
+  const _KeyboardStableViewport({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final MediaQueryData mediaQuery = MediaQuery.of(context);
+    return MediaQuery(
+      data: mediaQuery.removeViewInsets(removeBottom: true),
+      child: child,
+    );
+  }
+}
+
 class AnalyticsData {
   const AnalyticsData({
     required this.revenueLabels,
@@ -8616,7 +9669,7 @@ String _priceInputFromCentavos(int centavos) {
 int? _parsePriceInputCentavos(String value) {
   final String clean = value
       .trim()
-      .replaceAll(RegExp(r'(?i)php'), '')
+      .replaceAll(RegExp(r'php', caseSensitive: false), '')
       .replaceAll(',', '')
       .replaceAll(' ', '');
   if (clean.isEmpty) {
@@ -8688,10 +9741,45 @@ String _shortDateTime(DateTime date) {
 
 String _displayStatus(String status) {
   final String clean = status.trim().toLowerCase();
+  if (clean == 'removed') {
+    return 'Removed';
+  }
   if (clean == 'cancelled' || clean == 'canceled') {
     return 'Cancelled';
   }
   return 'Sold';
+}
+
+bool _isSoldTransaction(TransactionData transaction) {
+  return transaction.status == 'Sold';
+}
+
+DateTime _historyDateOnly(DateTime date) {
+  return DateTime(date.year, date.month, date.day);
+}
+
+DateTime? _transactionHistoryDay(TransactionData transaction) {
+  final DateTime? soldAt = transaction.soldAt;
+  if (soldAt != null) {
+    return _historyDateOnly(soldAt);
+  }
+  return _parseHistoryDate(transaction.date);
+}
+
+DateTime? _parseHistoryDate(String value) {
+  final RegExpMatch? match = RegExp(
+    r'^([A-Za-z]{3})\s+(\d{1,2}),\s*(\d{4})$',
+  ).firstMatch(value.trim());
+  if (match == null) {
+    return null;
+  }
+  final int month = monthNames.indexOf(match.group(1)!) + 1;
+  final int? day = int.tryParse(match.group(2)!);
+  final int? year = int.tryParse(match.group(3)!);
+  if (month <= 0 || day == null || year == null) {
+    return null;
+  }
+  return DateTime(year, month, day);
 }
 
 bool _isSameDay(DateTime a, DateTime b) {
@@ -10681,13 +11769,15 @@ class _InventoryFruitCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 9),
                 SmartStepper(
-                  label: 'Price / kg',
+                  label: 'Enter price / kg',
                   value: price > 0 ? money(price) : 'Set price',
                   controller: priceController,
                   focusNode: priceFocusNode,
                   hint: '90.00',
                   enabled: !readOnly,
                   onChanged: onPriceTyped,
+                  onSubmitted: (_) => onSave(),
+                  textInputAction: TextInputAction.done,
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
@@ -10779,6 +11869,8 @@ class SmartStepper extends StatelessWidget {
     this.hint,
     this.enabled = true,
     this.onChanged,
+    this.onSubmitted,
+    this.textInputAction,
     this.keyboardType,
     this.inputFormatters,
   });
@@ -10792,6 +11884,8 @@ class SmartStepper extends StatelessWidget {
   final String? hint;
   final bool enabled;
   final ValueChanged<String>? onChanged;
+  final ValueChanged<String>? onSubmitted;
+  final TextInputAction? textInputAction;
   final TextInputType? keyboardType;
   final List<TextInputFormatter>? inputFormatters;
 
@@ -10832,8 +11926,13 @@ class SmartStepper extends StatelessWidget {
                     focusNode: focusNode,
                     enabled: enabled,
                     keyboardType: keyboardType,
+                    textInputAction: textInputAction,
                     inputFormatters: inputFormatters,
+                    scrollPadding: const EdgeInsets.fromLTRB(20, 20, 20, 300),
+                    autocorrect: false,
+                    enableSuggestions: false,
                     onChanged: onChanged,
+                    onSubmitted: onSubmitted,
                     style: TextStyle(
                       color: enabled
                           ? AppColors.textPrimary
@@ -11100,13 +12199,19 @@ class ForecastTile extends StatelessWidget {
 }
 
 class HistoryTransactionCard extends StatelessWidget {
-  const HistoryTransactionCard({super.key, required this.transaction});
+  const HistoryTransactionCard({
+    super.key,
+    required this.transaction,
+    this.onManage,
+  });
 
   final TransactionData transaction;
+  final VoidCallback? onManage;
 
   @override
   Widget build(BuildContext context) {
     final bool cancelled = transaction.status == 'Cancelled';
+    final VoidCallback? manageAction = onManage;
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
@@ -11174,6 +12279,21 @@ class HistoryTransactionCard extends StatelessWidget {
                   : const StatusBadge.green('Done'),
             ],
           ),
+          if (manageAction != null) ...<Widget>[
+            const SizedBox(width: 4),
+            IconButton(
+              tooltip: 'Manage sale',
+              constraints: const BoxConstraints.tightFor(width: 34, height: 34),
+              padding: EdgeInsets.zero,
+              visualDensity: VisualDensity.compact,
+              onPressed: manageAction,
+              icon: const Icon(
+                Icons.more_vert_rounded,
+                color: AppColors.textSecondary,
+                size: 20,
+              ),
+            ),
+          ],
         ],
       ),
     );

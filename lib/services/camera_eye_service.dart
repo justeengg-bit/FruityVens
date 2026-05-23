@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:wifi_iot/wifi_iot.dart';
@@ -10,6 +11,7 @@ class CameraEyeStatus {
     required this.streamReachable,
     required this.currentSsid,
     required this.streamUrl,
+    required this.snapshotUrl,
     required this.message,
     this.probeUrl,
     this.wifiForced = false,
@@ -21,6 +23,7 @@ class CameraEyeStatus {
       streamReachable = false,
       currentSsid = 'Not connected',
       streamUrl = CameraEyeService.streamUrl,
+      snapshotUrl = CameraEyeService.snapshotUrl,
       probeUrl = null,
       wifiForced = false,
       supported = true,
@@ -31,16 +34,18 @@ class CameraEyeStatus {
       streamReachable = false,
       currentSsid = 'Connecting',
       streamUrl = CameraEyeService.streamUrl,
+      snapshotUrl = CameraEyeService.snapshotUrl,
       probeUrl = null,
       wifiForced = false,
       supported = true,
-      message = 'Connecting to the FruityVens camera AP...';
+      message = 'Connecting to the FruityVens camera preview...';
 
   const CameraEyeStatus.checking()
     : connectedToAp = false,
       streamReachable = false,
       currentSsid = 'Checking',
       streamUrl = CameraEyeService.streamUrl,
+      snapshotUrl = CameraEyeService.snapshotUrl,
       probeUrl = null,
       wifiForced = false,
       supported = true,
@@ -51,16 +56,18 @@ class CameraEyeStatus {
       streamReachable = false,
       currentSsid = 'Unsupported',
       streamUrl = CameraEyeService.streamUrl,
+      snapshotUrl = CameraEyeService.snapshotUrl,
       probeUrl = null,
       wifiForced = false,
       supported = false,
-      message = 'Camera AP connection is available on Android phones.';
+      message = 'Camera preview connection is available on Android phones.';
 
   const CameraEyeStatus.error(String errorMessage)
     : connectedToAp = false,
       streamReachable = false,
       currentSsid = 'Error',
       streamUrl = CameraEyeService.streamUrl,
+      snapshotUrl = CameraEyeService.snapshotUrl,
       probeUrl = null,
       wifiForced = false,
       supported = true,
@@ -70,126 +77,90 @@ class CameraEyeStatus {
   final bool streamReachable;
   final String currentSsid;
   final String streamUrl;
+  final String snapshotUrl;
   final String? probeUrl;
   final bool wifiForced;
   final bool supported;
   final String message;
 
-  bool get ready =>
-      currentSsid == CameraEyeService.ssid && connectedToAp && streamReachable;
+  bool get ready => connectedToAp && streamReachable;
 }
 
 class CameraEyeService {
   const CameraEyeService();
 
-  static const String ssid = 'FruityVens';
-  static const String password = '1234';
-  static const String host = '192.168.4.1';
-  static const String streamUrl = 'http://192.168.4.1:81/stream';
+  static const String ssid = 'Parafiber_F0C0 2.4G';
+  static const String host = '192.168.1.34';
+  static const String baseUrl = 'http://$host';
+  static const String snapshotUrl = '$baseUrl/snapshot.jpg';
+  static const String streamUrl = snapshotUrl;
+  static const String previewStartUrl = '$baseUrl/preview/start';
+  static const String previewStopUrl = '$baseUrl/preview/stop';
 
   static final List<Uri> _probeUris = <Uri>[
-    Uri.parse('http://$host:81/status'),
-    Uri.parse('http://$host/status'),
-    Uri.parse('http://$host/'),
-    Uri.parse(streamUrl),
+    Uri.parse('$baseUrl/status'),
+    Uri.parse(snapshotUrl),
+    Uri.parse(baseUrl),
   ];
 
   Future<CameraEyeStatus> connect() async {
-    if (!Platform.isAndroid) {
-      return const CameraEyeStatus.unsupported();
-    }
-
     try {
-      if (!await WiFiForIoTPlugin.isEnabled()) {
+      if (Platform.isAndroid && !await WiFiForIoTPlugin.isEnabled()) {
         await WiFiForIoTPlugin.setEnabled(true, shouldOpenSettings: true);
       }
-
-      final bool connected = await _connectToCameraAp();
-      if (!connected) {
-        return const CameraEyeStatus(
-          connectedToAp: false,
-          streamReachable: false,
-          currentSsid: 'Not connected',
-          streamUrl: streamUrl,
-          message:
-              'Could not join FruityVens. Check that the ESP32-CAM AP is powered on.',
-        );
-      }
-
-      await WiFiForIoTPlugin.forceWifiUsage(true);
-      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
       return status(
-        connectedMessage:
-            'Connected to FruityVens. The camera stream is reserved for backend YOLOv8n.',
+        connectedMessage: 'Connected to ESP32-CAM preview at $baseUrl.',
       );
     } on PlatformException catch (error) {
-      throw CameraEyeException(error.message ?? 'Camera AP connection failed.');
+      throw CameraEyeException(
+        error.message ?? 'Camera preview connection failed.',
+      );
     } catch (error) {
-      throw CameraEyeException('Camera AP connection failed: $error');
+      throw CameraEyeException('Camera preview connection failed: $error');
     }
   }
 
   Future<CameraEyeStatus> status({String? connectedMessage}) async {
-    if (!Platform.isAndroid) {
-      return const CameraEyeStatus.unsupported();
-    }
-
     try {
-      final bool connected = await WiFiForIoTPlugin.isConnected();
-      final String currentSsid =
-          _cleanSsid(await WiFiForIoTPlugin.getSSID()) ??
-          (connected ? 'Unknown Wi-Fi' : 'No Wi-Fi');
-      final bool onCameraAp = currentSsid == ssid;
-      String? reachableProbe;
-
-      if (onCameraAp) {
-        await WiFiForIoTPlugin.forceWifiUsage(true);
-        reachableProbe = await _firstReachableProbe();
-      } else {
-        await WiFiForIoTPlugin.forceWifiUsage(false);
-      }
+      final String currentSsid = await _currentWifiName();
+      final String? reachableProbe = await _firstReachableProbe();
 
       final bool streamReachable = reachableProbe != null;
-      final String statusMessage = onCameraAp
+      final String statusMessage = streamReachable
           ? connectedMessage ??
                 _statusMessage(
-                  onCameraAp: onCameraAp,
                   streamReachable: streamReachable,
                   currentSsid: currentSsid,
                 )
-          : _statusMessage(
-              onCameraAp: onCameraAp,
-              streamReachable: false,
-              currentSsid: currentSsid,
-            );
+          : _statusMessage(streamReachable: false, currentSsid: currentSsid);
       return CameraEyeStatus(
-        connectedToAp: onCameraAp,
+        connectedToAp: streamReachable,
         streamReachable: streamReachable,
         currentSsid: currentSsid,
         streamUrl: streamUrl,
+        snapshotUrl: snapshotUrl,
         probeUrl: reachableProbe,
-        wifiForced: onCameraAp,
+        wifiForced: false,
         message: statusMessage,
       );
     } on PlatformException catch (error) {
       throw CameraEyeException(
-        error.message ?? 'Camera AP status check failed.',
+        error.message ?? 'Camera preview status check failed.',
       );
     } catch (error) {
-      throw CameraEyeException('Camera AP status check failed: $error');
+      throw CameraEyeException('Camera preview status check failed: $error');
     }
   }
 
   Future<CameraEyeStatus> releaseRoute() async {
-    if (!Platform.isAndroid) {
-      return const CameraEyeStatus.unsupported();
-    }
-
     try {
-      await WiFiForIoTPlugin.forceWifiUsage(false);
+      if (Platform.isAndroid) {
+        await WiFiForIoTPlugin.forceWifiUsage(false);
+      }
       return status(
         connectedMessage:
-            'Camera AP route released. Internet traffic can use the normal network.',
+            'Camera route released. Internet traffic can use the normal network.',
       );
     } on PlatformException catch (error) {
       throw CameraEyeException(
@@ -200,40 +171,75 @@ class CameraEyeService {
     }
   }
 
-  Future<bool> _connectToCameraAp() async {
-    if (password.length >= 8) {
-      final bool wpaConnected = await WiFiForIoTPlugin.connect(
-        ssid,
-        password: password,
-        security: NetworkSecurity.WPA,
-        joinOnce: false,
-        withInternet: false,
-        timeoutInSeconds: 24,
+  Future<void> startPreview() async {
+    await _sendPreviewCommand(Uri.parse(previewStartUrl), 'start preview');
+  }
+
+  Future<void> stopPreview() async {
+    await _sendPreviewCommand(Uri.parse(previewStopUrl), 'stop preview');
+  }
+
+  Future<Uint8List> fetchSnapshot() async {
+    final Uri uri = Uri.parse(
+      '$snapshotUrl?ts=${DateTime.now().millisecondsSinceEpoch}',
+    );
+    final HttpClient client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 2);
+    try {
+      final HttpClientRequest request = await client
+          .getUrl(uri)
+          .timeout(const Duration(seconds: 2));
+      request.headers.set(HttpHeaders.acceptHeader, 'image/jpeg');
+      final HttpClientResponse response = await request.close().timeout(
+        const Duration(seconds: 4),
       );
-      if (wpaConnected) {
-        return true;
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw CameraEyeException(
+          'Camera snapshot HTTP ${response.statusCode}.',
+        );
       }
-    }
 
-    final bool openConnected = await WiFiForIoTPlugin.connect(
-      ssid,
-      security: NetworkSecurity.NONE,
-      joinOnce: false,
-      withInternet: false,
-      timeoutInSeconds: 24,
-    );
-    if (openConnected) {
-      return true;
+      final BytesBuilder bytes = BytesBuilder(copy: false);
+      await for (final List<int> chunk in response) {
+        bytes.add(chunk);
+      }
+      return bytes.takeBytes();
+    } on CameraEyeException {
+      rethrow;
+    } on TimeoutException {
+      throw const CameraEyeException('Camera snapshot timed out.');
+    } on SocketException {
+      throw const CameraEyeException('Camera snapshot is not reachable.');
+    } finally {
+      client.close(force: true);
     }
+  }
 
-    return WiFiForIoTPlugin.connect(
-      ssid,
-      password: password,
-      security: NetworkSecurity.WPA,
-      joinOnce: false,
-      withInternet: false,
-      timeoutInSeconds: 24,
-    );
+  Future<void> _sendPreviewCommand(Uri uri, String action) async {
+    final HttpClient client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 2);
+    try {
+      final HttpClientRequest request = await client
+          .getUrl(uri)
+          .timeout(const Duration(seconds: 2));
+      final HttpClientResponse response = await request.close().timeout(
+        const Duration(seconds: 3),
+      );
+      await response.drain<void>();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw CameraEyeException(
+          'Could not $action: HTTP ${response.statusCode}.',
+        );
+      }
+    } on CameraEyeException {
+      rethrow;
+    } on TimeoutException {
+      throw CameraEyeException('Could not $action: request timed out.');
+    } on SocketException {
+      throw CameraEyeException('Could not $action: camera is not reachable.');
+    } finally {
+      client.close(force: true);
+    }
   }
 
   Future<String?> _firstReachableProbe() async {
@@ -267,17 +273,27 @@ class CameraEyeService {
   }
 
   String _statusMessage({
-    required bool onCameraAp,
     required bool streamReachable,
     required String currentSsid,
   }) {
-    if (!onCameraAp) {
-      return 'Not connected to $ssid. Current Wi-Fi: $currentSsid.';
-    }
     if (streamReachable) {
-      return 'Camera eye is reachable for backend YOLOv8n processing.';
+      return 'Camera eye is reachable at $baseUrl. Tap Preview to see the ESP32-CAM view.';
     }
-    return 'Connected to FruityVens, but the camera endpoint is not responding yet.';
+    return 'ESP32-CAM is not reachable at $baseUrl. Current Wi-Fi: $currentSsid.';
+  }
+
+  Future<String> _currentWifiName() async {
+    if (!Platform.isAndroid) {
+      return 'Network';
+    }
+
+    try {
+      final bool connected = await WiFiForIoTPlugin.isConnected();
+      return _cleanSsid(await WiFiForIoTPlugin.getSSID()) ??
+          (connected ? 'Unknown Wi-Fi' : 'No Wi-Fi');
+    } on PlatformException {
+      return 'Unknown Wi-Fi';
+    }
   }
 
   String? _cleanSsid(String? value) {

@@ -11,7 +11,8 @@ plugins {
 
 val releaseKeystoreProperties = Properties()
 val releaseKeystorePropertiesFile = rootProject.file("key.properties")
-if (releaseKeystorePropertiesFile.exists()) {
+val hasReleaseSigning = releaseKeystorePropertiesFile.exists()
+if (hasReleaseSigning) {
     releaseKeystoreProperties.load(FileInputStream(releaseKeystorePropertiesFile))
 }
 
@@ -41,20 +42,21 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            if (!releaseKeystorePropertiesFile.exists()) {
-                throw GradleException("Missing android/key.properties for release signing.")
+        if (hasReleaseSigning) {
+            create("release") {
+                keyAlias = releaseKeystoreProperties["keyAlias"] as String
+                keyPassword = releaseKeystoreProperties["keyPassword"] as String
+                storeFile = file(releaseKeystoreProperties["storeFile"] as String)
+                storePassword = releaseKeystoreProperties["storePassword"] as String
             }
-            keyAlias = releaseKeystoreProperties["keyAlias"] as String
-            keyPassword = releaseKeystoreProperties["keyPassword"] as String
-            storeFile = file(releaseKeystoreProperties["storeFile"] as String)
-            storePassword = releaseKeystoreProperties["storePassword"] as String
         }
     }
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
