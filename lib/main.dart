@@ -287,6 +287,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     'Grapes',
   ];
   final Map<String, int> _prices = <String, int>{};
+  final Map<String, int> _draftPrices = <String, int>{};
   final Map<String, int> _stocks = <String, int>{};
 
   static const List<TransactionData> _demoTransactionHistory =
@@ -1016,6 +1017,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     final Set<String> configuredPriceFruits = await _loadConfiguredPriceFruits(
       scanReadyFruits,
     );
+    final Set<String> loadedFruitNames = scanReadyFruits
+        .map((LocalFruit fruit) => fruit.name)
+        .toSet();
     if (!mounted) {
       return;
     }
@@ -1047,6 +1051,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _configuredPriceFruits
         ..clear()
         ..addAll(configuredPriceFruits);
+      _draftPrices.removeWhere(
+        (String fruit, int _) => !loadedFruitNames.contains(fruit),
+      );
       if (_isGuestSession) {
         _managedFruits
           ..clear()
@@ -1068,6 +1075,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         _configuredPriceFruits
           ..clear()
           ..addAll(_scanReadyFruitOrder);
+        _draftPrices.clear();
       }
       _inventoryLoading = false;
     });
@@ -1239,6 +1247,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     return _inventoryPriceIsConfigured(fruit) ? _prices[fruit] : null;
   }
 
+  int _editablePriceFor(String fruit) {
+    return _draftPrices[fruit] ?? _prices[fruit] ?? 0;
+  }
+
   TextEditingController _priceInputControllerFor(String fruit) {
     final TextEditingController controller = _priceInputControllers.putIfAbsent(
       fruit,
@@ -1246,7 +1258,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     );
     final FocusNode? focusNode = _priceInputFocusNodes[fruit];
     if (!(focusNode?.hasFocus ?? false)) {
-      final String expected = _priceInputFromCentavos(_prices[fruit] ?? 0);
+      final String expected = _priceInputFromCentavos(_editablePriceFor(fruit));
       if (controller.text != expected) {
         controller.value = TextEditingValue(
           text: expected,
@@ -1266,7 +1278,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     if (controller == null) {
       return;
     }
-    final String text = _priceInputFromCentavos(_prices[fruit] ?? 0);
+    final String text = _priceInputFromCentavos(_editablePriceFor(fruit));
     controller.value = TextEditingValue(
       text: text,
       selection: TextSelection.collapsed(offset: text.length),
@@ -3488,14 +3500,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _showFullAccessRequired('Pricing');
       return;
     }
-    setState(() {
-      final int currentPrice = _prices[fruit] ?? 0;
-      if (currentPrice <= 0 && delta < 0) {
-        _prices[fruit] = 0;
-        return;
-      }
-      _prices[fruit] = math.max(0, currentPrice + delta);
-    });
+    final int currentPrice = _editablePriceFor(fruit);
+    _draftPrices[fruit] = currentPrice <= 0 && delta < 0
+        ? 0
+        : math.max(0, currentPrice + delta);
     _syncPriceInputController(fruit);
   }
 
@@ -3504,18 +3512,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       return;
     }
     if (value.trim().isEmpty) {
-      setState(() {
-        _prices[fruit] = 0;
-      });
+      _draftPrices[fruit] = 0;
       return;
     }
     final int? parsed = _parsePriceInputCentavos(value);
     if (parsed == null) {
       return;
     }
-    setState(() {
-      _prices[fruit] = parsed;
-    });
+    _draftPrices[fruit] = parsed;
   }
 
   Future<void> _saveInventoryFruit(String fruit) async {
@@ -3523,7 +3527,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _showFullAccessRequired('Pricing');
       return;
     }
-    final int price = _prices[fruit] ?? 0;
+    final int price = _editablePriceFor(fruit);
     if (price <= 0) {
       _toast('Set $fruit price per kg first.');
       return;
@@ -3538,6 +3542,18 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     if (!confirmed) {
       return;
     }
+    final bool wasConfigured = _configuredPriceFruits.contains(fruit);
+    final bool hasPriceConflict = _priceConflictFruits.contains(fruit);
+    if (existingFruit != null &&
+        oldPrice == price &&
+        !existingFruit.dirty &&
+        wasConfigured &&
+        !hasPriceConflict) {
+      _draftPrices.remove(fruit);
+      _syncPriceInputController(fruit);
+      _toast('$fruit is already saved at ${money(price)}/kg.');
+      return;
+    }
     final int preservedStock = _stocks[fruit] ?? 0;
     final _RestockSignal signal = _restockSignalForFruit(fruit);
     await _database.updateFruitInventory(
@@ -3548,6 +3564,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     await _database.saveSetting(_inventoryPriceConfiguredKey(fruit), '1');
     if (mounted) {
       setState(() {
+        _prices[fruit] = price;
+        _draftPrices.remove(fruit);
         _configuredPriceFruits.add(fruit);
         _priceConflictFruits.remove(fruit);
         if (_priceConflictNotice?.startsWith('$fruit ') ?? false) {
@@ -3604,6 +3622,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         _managedFruits.add(fruit);
       }
       _prices[fruit] = savedPrice;
+      _draftPrices.remove(fruit);
       _stocks[fruit] = savedStock;
       _configuredPriceFruits.add(fruit);
       _fruitToAdd = null;
@@ -3645,6 +3664,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         _expandedInventoryFruit = null;
       }
       _configuredPriceFruits.remove(fruit);
+      _draftPrices.remove(fruit);
     });
     _priceInputControllers.remove(fruit)?.dispose();
     _priceInputFocusNodes.remove(fruit)?.dispose();

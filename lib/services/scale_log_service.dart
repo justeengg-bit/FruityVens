@@ -178,10 +178,15 @@ class ScaleLogService {
       throw const ScaleLogException('Scale device ID is not configured.');
     }
 
-    final DataSnapshot snapshot = await database
-        .ref('scaleSales/${_databaseKey(cleanDeviceId)}')
-        .get()
-        .timeout(timeout);
+    final DataSnapshot snapshot;
+    try {
+      snapshot = await database
+          .ref('scaleSales/${_databaseKey(cleanDeviceId)}')
+          .get()
+          .timeout(timeout);
+    } catch (error) {
+      throw _readError(cleanDeviceId, error);
+    }
     final Object? value = snapshot.value;
     if (value is! Map) {
       return const <ScaleSaleLog>[];
@@ -234,11 +239,46 @@ class ScaleLogService {
       updates['$base/imported'] = true;
       updates['$base/importedAt'] = ServerValue.timestamp;
     }
-    await database.ref().update(updates).timeout(timeout);
+    try {
+      await database.ref().update(updates).timeout(timeout);
+    } catch (error) {
+      throw _writeError(cleanDeviceId, error);
+    }
   }
 
   String _databaseKey(String value) {
     return value.replaceAll(RegExp(r'[.#$\[\]/]'), '_');
+  }
+
+  ScaleLogException _readError(String deviceId, Object error) {
+    if (_isPermissionDenied(error)) {
+      return ScaleLogException(
+        'Realtime Database rules blocked scale read. Allow read/write on scaleSales/$deviceId.',
+      );
+    }
+    return ScaleLogException('Could not read Firebase scale sales.');
+  }
+
+  ScaleLogException _writeError(String deviceId, Object error) {
+    if (_isPermissionDenied(error)) {
+      return ScaleLogException(
+        'Realtime Database rules blocked scale import update. Allow write on scaleSales/$deviceId.',
+      );
+    }
+    return ScaleLogException('Could not mark Firebase scale sales imported.');
+  }
+
+  bool _isPermissionDenied(Object error) {
+    if (error is FirebaseException) {
+      final String code = error.code.toLowerCase();
+      final String message = (error.message ?? '').toLowerCase();
+      return code == 'permission-denied' ||
+          message.contains('permission denied') ||
+          message.contains("doesn't have permission");
+    }
+    final String message = error.toString().toLowerCase();
+    return message.contains('permission denied') ||
+        message.contains("doesn't have permission");
   }
 }
 
