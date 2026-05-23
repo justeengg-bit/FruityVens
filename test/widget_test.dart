@@ -458,6 +458,60 @@ void main() {
     expect(sales.single.status, 'removed');
   });
 
+  testWidgets('History filters records by selected date', (
+    WidgetTester tester,
+  ) async {
+    final AppDatabase database = AppDatabase.inMemory();
+    final DateTime now = DateTime.now();
+    final DateTime today = DateTime(now.year, now.month, now.day, 10, 15);
+    final DateTime otherDay = now.day > 1
+        ? DateTime(now.year, now.month, now.day - 1, 9, 30)
+        : DateTime(now.year, now.month, now.day + 1, 9, 30);
+
+    await database.addSale(
+      fruitName: 'Mango',
+      weightGrams: 1200,
+      unitPrice: 6000,
+      totalPrice: 7200,
+      soldAt: today,
+    );
+    await database.addSale(
+      fruitName: 'Banana',
+      weightGrams: 1000,
+      unitPrice: 3500,
+      totalPrice: 3500,
+      soldAt: otherDay,
+    );
+
+    await tester.pumpWidget(FruityVensApp(database: database));
+    await createAccountAndOpenDashboard(tester);
+
+    await tester.ensureVisible(find.text('View more'));
+    await tester.tap(find.text('View more'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Mango'), findsWidgets);
+    expect(find.textContaining('Banana'), findsNothing);
+    expect(find.byTooltip('Pick history date'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Pick history date'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('${otherDay.day}').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Banana'), findsWidgets);
+    expect(find.textContaining('Mango'), findsNothing);
+    expect(find.byTooltip('Show today'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Show today'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Mango'), findsWidgets);
+    expect(find.textContaining('Banana'), findsNothing);
+  });
+
   testWidgets('Inventory adds Philippine fruits and saves typed prices', (
     WidgetTester tester,
   ) async {

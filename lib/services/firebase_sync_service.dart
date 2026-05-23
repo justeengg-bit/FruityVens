@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
@@ -31,10 +33,7 @@ class FirebaseSyncService {
     if (databaseURL == null || databaseURL.isEmpty) {
       return null;
     }
-    return FirebaseDatabase.instanceFor(
-      app: app,
-      databaseURL: databaseURL,
-    );
+    return FirebaseDatabase.instanceFor(app: app, databaseURL: databaseURL);
   }
 
   String? get currentUserId => _auth?.currentUser?.uid;
@@ -234,19 +233,7 @@ class FirebaseSyncService {
     final DataSnapshot snapshot = await database
         .ref('users/$uid/transactions')
         .get();
-    final Object? value = snapshot.value;
-    if (value is! Map) {
-      return const <Map<String, Object?>>[];
-    }
-
-    final List<Map<String, Object?>> transactions = <Map<String, Object?>>[];
-    for (final Object? item in value.values) {
-      if (item is! Map) {
-        continue;
-      }
-      transactions.add(Map<String, Object?>.from(item));
-    }
-    return transactions;
+    return _mapsFromSnapshot(snapshot);
   }
 
   Future<List<Map<String, Object?>>> fetchInventory() async {
@@ -259,19 +246,33 @@ class FirebaseSyncService {
     final DataSnapshot snapshot = await database
         .ref('users/$uid/inventory')
         .get();
-    final Object? value = snapshot.value;
-    if (value is! Map) {
-      return const <Map<String, Object?>>[];
+    return _mapsFromSnapshot(snapshot);
+  }
+
+  Stream<List<Map<String, Object?>>> watchTransactions() {
+    final String? uid = currentUserId;
+    final FirebaseDatabase? database = _database;
+    if (uid == null || database == null) {
+      return const Stream<List<Map<String, Object?>>>.empty();
     }
 
-    final List<Map<String, Object?>> inventory = <Map<String, Object?>>[];
-    for (final Object? item in value.values) {
-      if (item is! Map) {
-        continue;
-      }
-      inventory.add(Map<String, Object?>.from(item));
+    return database
+        .ref('users/$uid/transactions')
+        .onValue
+        .map((DatabaseEvent event) => _mapsFromSnapshot(event.snapshot));
+  }
+
+  Stream<List<Map<String, Object?>>> watchInventory() {
+    final String? uid = currentUserId;
+    final FirebaseDatabase? database = _database;
+    if (uid == null || database == null) {
+      return const Stream<List<Map<String, Object?>>>.empty();
     }
-    return inventory;
+
+    return database
+        .ref('users/$uid/inventory')
+        .onValue
+        .map((DatabaseEvent event) => _mapsFromSnapshot(event.snapshot));
   }
 
   Future<void> syncFruit(Map<String, Object?> fruit) async {
@@ -342,6 +343,22 @@ class FirebaseSyncService {
 
   String _databaseKey(String value) {
     return value.replaceAll(RegExp(r'[.#$\[\]/]'), '_');
+  }
+
+  List<Map<String, Object?>> _mapsFromSnapshot(DataSnapshot snapshot) {
+    final Object? value = snapshot.value;
+    if (value is! Map) {
+      return const <Map<String, Object?>>[];
+    }
+
+    final List<Map<String, Object?>> items = <Map<String, Object?>>[];
+    for (final Object? item in value.values) {
+      if (item is! Map) {
+        continue;
+      }
+      items.add(Map<String, Object?>.from(item));
+    }
+    return items;
   }
 
   String _authMessage(auth.FirebaseAuthException error) {

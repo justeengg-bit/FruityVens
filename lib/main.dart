@@ -253,6 +253,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   Map<String, Object?>? _deviceProfile;
   DateTime? _lastBackGestureAt;
   Timer? _cloudSyncTimer;
+  StreamSubscription<List<Map<String, Object?>>>? _inventoryLiveSubscription;
+  StreamSubscription<List<Map<String, Object?>>>? _transactionsLiveSubscription;
+  String? _liveSyncUserId;
+  int _liveSyncGeneration = 0;
   Timer? _scaleLogTimer;
   Timer? _splashFadeTimer;
   Timer? _splashRemoveTimer;
@@ -266,6 +270,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   int _walkthroughPage = 0;
   int _selectedYear = DateTime.now().year;
   int _selectedMonth = DateTime.now().month - 1;
+  DateTime _selectedHistoryDate = _historyDateOnly(DateTime.now());
   String? _fruitToAdd;
   String? _expandedInventoryFruit;
   String? _priceConflictNotice;
@@ -448,6 +453,15 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           )
           .toList(growable: false);
 
+  List<TransactionData> get _selectedHistoryDateTransactions =>
+      _visibleTransactionHistory
+          .where((TransactionData transaction) {
+            final DateTime? soldDate = _transactionHistoryDay(transaction);
+            return soldDate != null &&
+                _isSameDay(soldDate, _selectedHistoryDate);
+          })
+          .toList(growable: false);
+
   static const Map<String, FruitInfo> _catalog = <String, FruitInfo>{
     'Apple': FruitInfo('Apple', Icons.apple_rounded, 90, 20),
     'Orange': FruitInfo('Orange', Icons.circle_rounded, 85, 25),
@@ -603,6 +617,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       focusNode.dispose();
     }
     _cloudSyncTimer?.cancel();
+    _stopFirebaseLiveSync();
     _scaleLogTimer?.cancel();
     _splashFadeTimer?.cancel();
     _splashRemoveTimer?.cancel();
@@ -639,6 +654,135 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     _cloudSyncTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       unawaited(_syncWhenInternetReturns());
     });
+  }
+
+  void _startFirebaseLiveSync() {
+    final String? uid = _firebaseSyncService.currentUserId;
+    if (!_cloudSyncEnabled || _isGuestSession || uid == null) {
+      _stopFirebaseLiveSync();
+      return;
+    }
+    if (_liveSyncUserId == uid &&
+        _inventoryLiveSubscription != null &&
+        _transactionsLiveSubscription != null) {
+      return;
+    }
+
+    _stopFirebaseLiveSync();
+    _liveSyncGeneration += 1;
+    final int generation = _liveSyncGeneration;
+    _liveSyncUserId = uid;
+    _inventoryLiveSubscription = _firebaseSyncService.watchInventory().listen(
+      (List<Map<String, Object?>> inventory) {
+        unawaited(
+          _applyCloudInventoryFromFirebase(
+            inventory,
+            fromLiveSync: true,
+            liveSyncUserId: uid,
+            liveSyncGeneration: generation,
+          ),
+        );
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (!_isLiveSyncCurrent(uid, generation)) {
+          return;
+        }
+        _handleFirebaseLiveSyncError(
+          'Inventory live sync failed',
+          error,
+          stackTrace,
+        );
+      },
+    );
+    _transactionsLiveSubscription = _firebaseSyncService
+        .watchTransactions()
+        .listen(
+          (List<Map<String, Object?>> transactions) {
+            unawaited(
+              _applyCloudTransactionsFromFirebase(
+                transactions,
+                fromLiveSync: true,
+                liveSyncUserId: uid,
+                liveSyncGeneration: generation,
+              ),
+            );
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            if (!_isLiveSyncCurrent(uid, generation)) {
+              return;
+            }
+            _handleFirebaseLiveSyncError(
+              'Transaction live sync failed',
+              error,
+              stackTrace,
+            );
+          },
+        );
+  }
+
+  void _stopFirebaseLiveSync() {
+    _liveSyncGeneration += 1;
+    _liveSyncUserId = null;
+    final StreamSubscription<List<Map<String, Object?>>>? inventory =
+        _inventoryLiveSubscription;
+    final StreamSubscription<List<Map<String, Object?>>>? transactions =
+        _transactionsLiveSubscription;
+    _inventoryLiveSubscription = null;
+    _transactionsLiveSubscription = null;
+    if (inventory != null) {
+      unawaited(inventory.cancel());
+    }
+    if (transactions != null) {
+      unawaited(transactions.cancel());
+    }
+  }
+
+  bool _isLiveSyncCurrent(String userId, int generation) {
+    return mounted &&
+        !_isGuestSession &&
+        _cloudSyncEnabled &&
+        _liveSyncUserId == userId &&
+        _liveSyncGeneration == generation &&
+        _firebaseSyncService.currentUserId == userId;
+  }
+
+  bool _canApplyCloudLiveSync(String? userId, int? generation) {
+    if (userId == null || generation == null) {
+      return true;
+    }
+    return _isLiveSyncCurrent(userId, generation);
+  }
+
+  void _handleFirebaseLiveSyncError(
+    String message,
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    _logCloudSyncIssue(message, error, stackTrace);
+    if (!mounted) {
+      return;
+    }
+    final String syncMessage = _firebaseSyncErrorMessage(error);
+    setState(() {
+      _emailPasswordProviderBlocked = _isEmailPasswordProviderDisabledMessage(
+        syncMessage,
+      );
+      _cloudSyncStatus = _cloudStatusForSyncError(syncMessage);
+    });
+  }
+
+  String _firebaseSyncErrorMessage(Object error) {
+    if (error is FirebaseException) {
+      final String code = error.code.toLowerCase();
+      final String message = (error.message ?? '').toLowerCase();
+      if (code == 'permission-denied' ||
+          message.contains('permission denied') ||
+          message.contains('permission_denied')) {
+        return 'Realtime Database rules blocked cloud sync. Allow users/{uid} reads and writes in Firebase Rules.';
+      }
+      return error.message ?? error.code;
+    }
+    return error.toString();
   }
 
   Future<void> _loadScaleLogSettings() async {
@@ -845,6 +989,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             _firebaseSyncService.currentUserId == null)) {
       return;
     }
+    if (_firebaseSyncService.currentUserId != null) {
+      _startFirebaseLiveSync();
+    }
+
     final bool online = await _hasInternetConnection();
     if (!mounted || !online) {
       return;
@@ -884,6 +1032,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       await _syncInventoryToFirebase();
       await _syncTransactionsToFirebase();
       await _pullTransactionsFromFirebase();
+      _startFirebaseLiveSync();
       if (!mounted) {
         return;
       }
@@ -1022,6 +1171,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     if (!mounted) {
       return;
     }
+    final Set<String> activeInputFruitNames = _isGuestSession
+        ? _scanReadyFruitOrder.toSet()
+        : loadedFruitNames;
     setState(() {
       _managedFruits
         ..clear()
@@ -1078,6 +1230,17 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       }
       _inventoryLoading = false;
     });
+    _disposePriceInputsExcept(activeInputFruitNames);
+  }
+
+  void _disposePriceInputsExcept(Set<String> activeFruits) {
+    final List<String> staleInputs = _priceInputControllers.keys
+        .where((String fruit) => !activeFruits.contains(fruit))
+        .toList();
+    for (final String fruit in staleInputs) {
+      _priceInputControllers.remove(fruit)?.dispose();
+      _priceInputFocusNodes.remove(fruit)?.dispose();
+    }
   }
 
   Future<Set<String>> _loadConfiguredPriceFruits(
@@ -1617,7 +1780,18 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
     final List<Map<String, Object?>> cloudInventory = await _firebaseSyncService
         .fetchInventory();
-    if (cloudInventory.isEmpty) {
+    await _applyCloudInventoryFromFirebase(cloudInventory);
+  }
+
+  Future<void> _applyCloudInventoryFromFirebase(
+    List<Map<String, Object?>> cloudInventory, {
+    bool fromLiveSync = false,
+    String? liveSyncUserId,
+    int? liveSyncGeneration,
+  }) async {
+    if (!_canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration) ||
+        _isGuestSession ||
+        cloudInventory.isEmpty) {
       return;
     }
 
@@ -1632,6 +1806,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       final FruitInfo info = _catalog[name]!;
       final int cloudPrice = _priceCentavosFromCloud(fruit);
       final LocalFruit? localFruit = await _database.getManagedFruit(name);
+      if (!_canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration)) {
+        return;
+      }
       if (localFruit != null &&
           localFruit.dirty &&
           localFruit.price != cloudPrice) {
@@ -1660,8 +1837,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           oldPrice: localFruit.price,
           newPrice: cloudPrice,
           source: 'cloud',
-          note: 'Synced from Firebase.',
+          note: fromLiveSync
+              ? 'Updated automatically from Firebase.'
+              : 'Synced from Firebase.',
         );
+      }
+      if (!_canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration)) {
+        return;
       }
       await _database.saveManagedFruitFromCloud(
         name: name,
@@ -1674,8 +1856,21 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         await _database.saveSetting(_inventoryPriceConfiguredKey(name), '1');
       }
     }
+    if (!_canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration)) {
+      return;
+    }
     await _loadInventoryFromDatabase();
     await _loadPriceHistoryFromDatabase();
+    if (mounted &&
+        fromLiveSync &&
+        _canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration)) {
+      setState(() {
+        _emailPasswordProviderBlocked = false;
+        _cloudSyncStatus = _priceConflictFruits.isEmpty
+            ? 'Synced with Firebase'
+            : 'Price conflict needs review';
+      });
+    }
   }
 
   Future<void> _pullTransactionsFromFirebase() async {
@@ -1687,13 +1882,40 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
     final List<Map<String, Object?>> cloudTransactions =
         await _firebaseSyncService.fetchTransactions();
-    if (cloudTransactions.isEmpty) {
+    await _applyCloudTransactionsFromFirebase(cloudTransactions);
+  }
+
+  Future<void> _applyCloudTransactionsFromFirebase(
+    List<Map<String, Object?>> cloudTransactions, {
+    bool fromLiveSync = false,
+    String? liveSyncUserId,
+    int? liveSyncGeneration,
+  }) async {
+    if (!_canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration) ||
+        _isGuestSession ||
+        cloudTransactions.isEmpty) {
       return;
     }
     for (final Map<String, Object?> transaction in cloudTransactions) {
+      if (!_canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration)) {
+        return;
+      }
       await _database.saveSaleFromCloud(transaction);
     }
+    if (!_canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration)) {
+      return;
+    }
     await _loadTransactionsFromDatabase();
+    if (mounted &&
+        fromLiveSync &&
+        _canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration)) {
+      setState(() {
+        _emailPasswordProviderBlocked = false;
+        _cloudSyncStatus = _priceConflictFruits.isEmpty
+            ? 'Synced with Firebase'
+            : 'Price conflict needs review';
+      });
+    }
   }
 
   Future<void> _registerCurrentDeviceWithFirebase() async {
@@ -2080,6 +2302,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       return;
     }
     fruityVensMessengerKey.currentState?.hideCurrentSnackBar();
+    _stopFirebaseLiveSync();
     final String? deviceId = _deviceId;
     if (!mounted) {
       return;
@@ -2282,6 +2505,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         _firebaseSyncService.currentUserId == null) {
       return;
     }
+    if (_firebaseSyncService.currentUserId != null) {
+      _startFirebaseLiveSync();
+    }
 
     try {
       final FirebaseAccount? cloudAccount = await _firebaseSyncService
@@ -2306,6 +2532,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       await _syncInventoryToFirebase();
       await _syncTransactionsToFirebase();
       await _pullTransactionsFromFirebase();
+      _startFirebaseLiveSync();
     } on FirebaseSyncException catch (error, stackTrace) {
       _logCloudSyncIssue(
         'Local account cloud refresh failed',
@@ -2960,6 +3187,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   }
 
   void _continueAsGuest() {
+    _stopFirebaseLiveSync();
     unawaited(_database.saveSetting(_walkthroughSeenKey, 'true'));
     setState(() {
       _isGuestSession = true;
@@ -6114,8 +6342,77 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     _toast(successMessage);
   }
 
+  DateTime get _historyFirstSelectableDate {
+    final DateTime today = _historyDateOnly(DateTime.now());
+    DateTime earliest = today;
+    for (final TransactionData transaction in _visibleTransactionHistory) {
+      final DateTime? day = _transactionHistoryDay(transaction);
+      if (day != null && day.isBefore(earliest)) {
+        earliest = day;
+      }
+    }
+    return earliest;
+  }
+
+  DateTime get _historyLastSelectableDate {
+    DateTime latest = _historyDateOnly(DateTime.now());
+    for (final TransactionData transaction in _visibleTransactionHistory) {
+      final DateTime? day = _transactionHistoryDay(transaction);
+      if (day != null && day.isAfter(latest)) {
+        latest = day;
+      }
+    }
+    return latest;
+  }
+
+  DateTime _clampedHistoryDate(DateTime date) {
+    final DateTime day = _historyDateOnly(date);
+    final DateTime firstDate = _historyFirstSelectableDate;
+    final DateTime lastDate = _historyLastSelectableDate;
+    if (day.isBefore(firstDate)) {
+      return firstDate;
+    }
+    if (day.isAfter(lastDate)) {
+      return lastDate;
+    }
+    return day;
+  }
+
+  Future<void> _pickHistoryDate() async {
+    final DateTime firstDate = _historyFirstSelectableDate;
+    final DateTime lastDate = _historyLastSelectableDate;
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: _clampedHistoryDate(_selectedHistoryDate),
+      firstDate: firstDate,
+      lastDate: lastDate,
+      helpText: 'Select history date',
+    );
+    if (picked == null || !mounted) {
+      return;
+    }
+    setState(() {
+      _selectedHistoryDate = _historyDateOnly(picked);
+    });
+  }
+
+  void _showTodayHistory() {
+    final DateTime today = _historyDateOnly(DateTime.now());
+    if (_isSameDay(_selectedHistoryDate, today)) {
+      return;
+    }
+    setState(() {
+      _selectedHistoryDate = today;
+    });
+  }
+
   Widget _transactionHistoryScreen() {
-    final List<TransactionData> transactions = _visibleTransactionHistory;
+    final DateTime selectedDate = _selectedHistoryDate;
+    final bool selectedToday = _isSameDay(selectedDate, DateTime.now());
+    final String dateLabel = selectedToday
+        ? 'Today'
+        : _formatDate(selectedDate);
+    final List<TransactionData> transactions = _selectedHistoryDateTransactions;
     final int sold = transactions.where(_isSoldTransaction).length;
     final int cancelled = transactions
         .where((TransactionData item) => item.status == 'Cancelled')
@@ -6155,14 +6452,22 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    const Text(
-                      'Today',
-                      style: TextStyle(
+                    Text(
+                      dateLabel,
+                      style: const TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 2),
+                    Text(
+                      _formatDate(selectedDate),
+                      style: const TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
                     Wrap(
                       spacing: 7,
                       runSpacing: 6,
@@ -6175,6 +6480,38 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   ],
                 ),
               ),
+              IconButton(
+                tooltip: 'Pick history date',
+                constraints: const BoxConstraints.tightFor(
+                  width: 36,
+                  height: 36,
+                ),
+                padding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+                onPressed: () => unawaited(_pickHistoryDate()),
+                icon: const Icon(
+                  Icons.calendar_month_rounded,
+                  color: AppColors.textSecondary,
+                  size: 20,
+                ),
+              ),
+              if (!selectedToday)
+                IconButton(
+                  tooltip: 'Show today',
+                  constraints: const BoxConstraints.tightFor(
+                    width: 36,
+                    height: 36,
+                  ),
+                  padding: EdgeInsets.zero,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: _showTodayHistory,
+                  icon: const Icon(
+                    Icons.today_rounded,
+                    color: AppColors.orangeText,
+                    size: 20,
+                  ),
+                ),
+              const SizedBox(width: 6),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: <Widget>[
@@ -6206,7 +6543,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   _emptyStateCard(
                     icon: Icons.receipt_long_rounded,
                     title: 'No transaction records',
-                    detail: 'Sales history will appear here.',
+                    detail: selectedToday
+                        ? 'No sales recorded today.'
+                        : 'No sales recorded on ${_formatDate(selectedDate)}.',
                   ),
                 ]
               : transactions.map((TransactionData transaction) {
@@ -9413,6 +9752,34 @@ String _displayStatus(String status) {
 
 bool _isSoldTransaction(TransactionData transaction) {
   return transaction.status == 'Sold';
+}
+
+DateTime _historyDateOnly(DateTime date) {
+  return DateTime(date.year, date.month, date.day);
+}
+
+DateTime? _transactionHistoryDay(TransactionData transaction) {
+  final DateTime? soldAt = transaction.soldAt;
+  if (soldAt != null) {
+    return _historyDateOnly(soldAt);
+  }
+  return _parseHistoryDate(transaction.date);
+}
+
+DateTime? _parseHistoryDate(String value) {
+  final RegExpMatch? match = RegExp(
+    r'^([A-Za-z]{3})\s+(\d{1,2}),\s*(\d{4})$',
+  ).firstMatch(value.trim());
+  if (match == null) {
+    return null;
+  }
+  final int month = monthNames.indexOf(match.group(1)!) + 1;
+  final int? day = int.tryParse(match.group(2)!);
+  final int? year = int.tryParse(match.group(3)!);
+  if (month <= 0 || day == null || year == null) {
+    return null;
+  }
+  return DateTime(year, month, day);
 }
 
 bool _isSameDay(DateTime a, DateTime b) {
