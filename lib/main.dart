@@ -3946,7 +3946,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         ReportMetric('Camera', _cameraEyeStateLabel, 'Fruit scanning'),
       ],
       inventory: _managedFruits.map((String fruit) {
-        final _RestockSignal signal = _restockSignalForFruit(fruit);
+        final _RestockSignal signal = _restockSignalForFruit(
+          fruit,
+          stats: stats,
+        );
         return ReportFruit(
           name: fruit,
           pricePerKg: _inventoryPriceIsConfigured(fruit)
@@ -4010,7 +4013,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       ];
     }
     return stats.topFruitRanks.map((FruitRank rank) {
-      final _RestockSignal signal = _restockSignalForFruit(rank.name);
+      final _RestockSignal signal = _restockSignalForFruit(
+        rank.name,
+        stats: stats,
+      );
       return ReportForecastRow(
         name: rank.name,
         value: '${rank.weightLabel} sold today',
@@ -4153,9 +4159,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     );
   }
 
-  _RestockSignal _restockSignalForFruit(String fruit) {
-    final List<FruitRank> ranks = _dashboardStats().topFruitRanks;
+  _RestockSignal _restockSignalForFruit(String fruit, {DashboardStats? stats}) {
+    final List<FruitRank> ranks = (stats ?? _dashboardStats()).topFruitRanks;
     final int index = ranks.indexWhere((FruitRank rank) => rank.name == fruit);
+    return _restockSignalForRankIndex(index);
+  }
+
+  _RestockSignal _restockSignalForRankIndex(int index) {
     if (index == 0) {
       return const _RestockSignal(
         label: 'Heavy restock',
@@ -4274,6 +4284,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         }
       },
       child: Scaffold(
+        resizeToAvoidBottomInset: false,
         body: Stack(
           children: <Widget>[
             SafeArea(
@@ -4322,9 +4333,11 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
   Widget _screenShell() {
     final Widget? fixedNav = _fixedScreenNav();
+    final double keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+    final double bottomPadding = 32 + keyboardInset;
     final EdgeInsets contentPadding = fixedNav == null
-        ? const EdgeInsets.fromLTRB(16, 16, 16, 32)
-        : const EdgeInsets.fromLTRB(16, 14, 16, 32);
+        ? EdgeInsets.fromLTRB(16, 16, 16, bottomPadding)
+        : EdgeInsets.fromLTRB(16, 14, 16, bottomPadding);
 
     final Widget scrollableContent = SingleChildScrollView(
       physics: const AlwaysScrollableScrollPhysics(),
@@ -6347,7 +6360,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   fruit: info,
                   price: _prices[fruit] ?? 0,
                   priceConfigured: _inventoryPriceIsConfigured(fruit),
-                  restockSignal: _restockSignalForFruit(fruit),
+                  restockSignal: _restockSignalForFruit(fruit, stats: stats),
                   expanded: expanded,
                   readOnly: _isGuestSession,
                   priceController: _priceInputControllerFor(fruit),
@@ -6851,7 +6864,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   }
 
   Widget _inventoryRestockRow(FruitRank rank, int position) {
-    final _RestockSignal signal = _restockSignalForFruit(rank.name);
+    final _RestockSignal signal = _restockSignalForRankIndex(position - 1);
     final FruitInfo? info = _catalog[rank.name];
     final Color rankColor = switch (position) {
       1 => const Color(0xFFFFD54F),
@@ -11435,6 +11448,8 @@ class SmartStepper extends StatelessWidget {
                     keyboardType: keyboardType,
                     textInputAction: textInputAction,
                     inputFormatters: inputFormatters,
+                    autocorrect: false,
+                    enableSuggestions: false,
                     onChanged: onChanged,
                     onSubmitted: onSubmitted,
                     style: TextStyle(
