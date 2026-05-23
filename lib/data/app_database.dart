@@ -768,6 +768,55 @@ class AppDatabase {
     return rows.map(LocalSale.fromMap).toList();
   }
 
+  Future<void> updateSaleStatus({
+    required int id,
+    required String status,
+  }) async {
+    final String cleanStatus = status.trim().toLowerCase();
+    if (cleanStatus.isEmpty) {
+      return;
+    }
+
+    if (_memory) {
+      final int index = _memorySales.indexWhere(
+        (LocalSale sale) => sale.id == id,
+      );
+      if (index < 0) {
+        return;
+      }
+      final LocalSale sale = _memorySales[index];
+      _memorySales[index] = LocalSale(
+        id: sale.id,
+        cloudId: sale.cloudId,
+        fruitName: sale.fruitName,
+        weightGrams: sale.weightGrams,
+        unitPrice: sale.unitPrice,
+        totalPrice: sale.totalPrice,
+        status: cleanStatus,
+        soldAt: sale.soldAt,
+        synced: false,
+      );
+      return;
+    }
+
+    final Database db = await _database;
+    final int updated = await db.update(
+      'sales_transactions',
+      <String, Object?>{'status': cleanStatus, 'synced': 0},
+      where: 'id = ?',
+      whereArgs: <Object>[id],
+    );
+    if (updated == 0) {
+      return;
+    }
+    await enqueueSync(
+      entityType: 'transaction',
+      entityId: id.toString(),
+      action: 'status_update',
+      payload: '{"id":$id,"status":"$cleanStatus"}',
+    );
+  }
+
   Future<bool> saleExistsByCloudId(String cloudId) async {
     if (_memory) {
       return _memorySales.any((LocalSale sale) => sale.cloudId == cloudId);

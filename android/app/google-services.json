@@ -1,45 +1,26 @@
 {
   "project_info": {
-    "project_number": "916363531369",
-    "firebase_url": "https://al-sapp-default-rtdb.asia-southeast1.firebasedatabase.app",
-    "project_id": "al-sapp",
-    "storage_bucket": "al-sapp.firebasestorage.app"
+    "project_number": "877154452010",
+    "project_id": "fruityv",
+    "storage_bucket": "fruityv.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:916363531369:android:fe369998784cc1c68d3ef8",
+        "mobilesdk_app_id": "1:877154452010:android:715d1884b3b8d0c9573953",
         "android_client_info": {
           "package_name": "com.example.fruityvens_app"
         }
       },
-      "oauth_client": [
-        {
-          "client_id": "916363531369-4b0v400h41g3ooh8rjt15b0pks7725dn.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.example.fruityvens_app",
-            "certificate_hash": "1a3bc36394bfea7e2466a2efb43c9b2283e52491"
-          }
-        },
-        {
-          "client_id": "916363531369-v9e5ghgjf08kal79d50ljrrp89i5mola.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
+      "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyBmNUxdKcb6xAvben2wPo1wwiMGaAMYAVs"
+          "current_key": "AIzaSyBnQ7Gp-QQuuZgX6zMiDCGlCDAe_pEwUEs"
         }
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "916363531369-v9e5ghgjf08kal79d50ljrrp89i5mola.apps.googleusercontent.com",
-              "client_type": 3
-            }
-          ]
+          "other_platform_oauth_client": []
         }
       }
     }

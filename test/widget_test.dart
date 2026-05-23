@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart' show Switch;
+import 'package:flutter/material.dart' show DropdownButtonFormField, Switch;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fruityvens_app/data/app_database.dart';
@@ -404,5 +404,110 @@ void main() {
     await openOperationsMenu(tester);
     expect(find.text('Download Data'), findsOneWidget);
     expect(find.text('History'), findsOneWidget);
+  });
+
+  testWidgets('History can void, restore, and remove mistaken sales', (
+    WidgetTester tester,
+  ) async {
+    final AppDatabase database = AppDatabase.inMemory();
+    await database.addSale(
+      fruitName: 'Mango',
+      weightGrams: 1200,
+      unitPrice: 6000,
+      totalPrice: 7200,
+      soldAt: DateTime.now(),
+    );
+
+    await tester.pumpWidget(FruityVensApp(database: database));
+    await createAccountAndOpenDashboard(tester);
+
+    await tester.ensureVisible(find.text('View more'));
+    await tester.tap(find.text('View more'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Mango'), findsWidgets);
+    expect(find.text('1 sold'), findsOneWidget);
+    expect(find.byTooltip('Manage sale'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Manage sale'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cancel sale'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('0 sold'), findsOneWidget);
+    expect(find.text('1 cancelled'), findsOneWidget);
+    expect(find.text('Void'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Manage sale'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Restore sale'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('1 sold'), findsOneWidget);
+    expect(find.text('Done'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Manage sale'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove from history'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('No transaction records'), findsOneWidget);
+    final List<LocalSale> sales = await database.getSalesTransactions();
+    expect(sales.single.status, 'removed');
+  });
+
+  testWidgets('Inventory adds Philippine fruits and saves typed prices', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(720, 1612);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final AppDatabase database = AppDatabase.inMemory();
+    await tester.pumpWidget(FruityVensApp(database: database));
+    await createAccountAndOpenDashboard(tester);
+
+    await openOperationsMenu(tester);
+    await tester.tap(find.text('Inventory'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Manage fruits'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.pumpAndSettle();
+    expect(find.text('Lemon'), findsOneWidget);
+    expect(find.text('Papaya'), findsOneWidget);
+    expect(find.text('Watermelon'), findsOneWidget);
+    await tester.tap(find.text('Lemon'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(EditableText).last, '42.50');
+    await tester.tap(find.text('Add fruit'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Lemon'), findsWidgets);
+    LocalFruit? lemon = await database.getManagedFruit('Lemon');
+    expect(lemon?.price, 4250);
+
+    await tester.tap(find.byTooltip('Done managing fruits'));
+    await tester.pumpAndSettle();
+    expect(find.text('PHP 42.50/kg'), findsOneWidget);
+
+    final Finder lemonPriceField = find.byWidgetPredicate((Widget widget) {
+      return widget is EditableText && widget.controller.text == '42.50';
+    });
+    expect(lemonPriceField, findsOneWidget);
+    await tester.enterText(lemonPriceField, '55.75');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+
+    expect(find.text('PHP 55.75/kg'), findsOneWidget);
+    lemon = await database.getManagedFruit('Lemon');
+    expect(lemon?.price, 5575);
   });
 }

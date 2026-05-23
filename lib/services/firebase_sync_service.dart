@@ -27,9 +27,13 @@ class FirebaseSyncService {
       return null;
     }
     final FirebaseApp app = Firebase.app();
+    final String? databaseURL = app.options.databaseURL;
+    if (databaseURL == null || databaseURL.isEmpty) {
+      return null;
+    }
     return FirebaseDatabase.instanceFor(
       app: app,
-      databaseURL: app.options.databaseURL,
+      databaseURL: databaseURL,
     );
   }
 

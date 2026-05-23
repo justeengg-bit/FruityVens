@@ -153,6 +153,8 @@ enum AppScreen {
 
 enum AnalyticsPeriod { sevenDays, thirtyDays, month, year, allTime }
 
+enum _TransactionHistoryAction { keep, cancel, restore, remove }
+
 class _PhoneLinkSetup {
   const _PhoneLinkSetup({required this.pin, required this.useBiometrics});
 
@@ -437,37 +439,55 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   List<TransactionData> get _activeTransactionHistory =>
       _isGuestSession ? _demoTransactionHistory : _realTransactionHistory;
 
+  List<TransactionData> get _visibleTransactionHistory =>
+      _activeTransactionHistory
+          .where(
+            (TransactionData transaction) => transaction.status != 'Removed',
+          )
+          .toList(growable: false);
+
   static const Map<String, FruitInfo> _catalog = <String, FruitInfo>{
     'Apple': FruitInfo('Apple', Icons.apple_rounded, 90, 20),
-    'Mango': FruitInfo('Mango', Icons.spa_rounded, 60, 42),
-    'Watermelon': FruitInfo('Watermelon', Icons.circle_rounded, 50, 60),
-    'Melon': FruitInfo('Melon', Icons.blur_circular_rounded, 55, 16),
-    'Papaya': FruitInfo('Papaya', Icons.eco_rounded, 50, 15),
-    'Avocado': FruitInfo('Avocado', Icons.grass_rounded, 110, 18),
-    'Mango Carabao': FruitInfo('Mango Carabao', Icons.spa_rounded, 80, 14),
-    'Indian Mango': FruitInfo('Indian Mango', Icons.spa_rounded, 75, 12),
     'Orange': FruitInfo('Orange', Icons.circle_rounded, 85, 25),
-    'Lemon': FruitInfo('Lemon', Icons.brightness_1_rounded, 70, 17),
-    'Grapes': FruitInfo('Grapes', Icons.bubble_chart_rounded, 130, 10),
-    'Pear': FruitInfo('Pear', Icons.local_florist_rounded, 95, 11),
     'Banana': FruitInfo('Banana', Icons.rice_bowl_rounded, 35, 28),
-    'Langkatan': FruitInfo('Langkatan', Icons.rice_bowl_rounded, 45, 9),
+    'Mango': FruitInfo('Mango', Icons.spa_rounded, 60, 42),
+    'Grapes': FruitInfo('Grapes', Icons.bubble_chart_rounded, 130, 10),
+    'Lemon': FruitInfo('Lemon', Icons.brightness_1_rounded, 70, 17),
+    'Papaya': FruitInfo('Papaya', Icons.eco_rounded, 50, 15),
+    'Watermelon': FruitInfo('Watermelon', Icons.circle_rounded, 50, 60),
     'Pineapple': FruitInfo('Pineapple', Icons.park_rounded, 45, 0),
-    'Lanzones': FruitInfo('Lanzones', Icons.scatter_plot_rounded, 120, 7),
     'Calamansi': FruitInfo('Calamansi', Icons.brightness_1_rounded, 65, 13),
-    'Guyabano': FruitInfo('Guyabano', Icons.eco_rounded, 100, 8),
     'Pomelo': FruitInfo('Pomelo', Icons.circle_rounded, 95, 10),
     'Guava': FruitInfo('Guava', Icons.local_florist_rounded, 50, 21),
+    'Avocado': FruitInfo('Avocado', Icons.grass_rounded, 110, 18),
+    'Coconut': FruitInfo('Coconut', Icons.beach_access_rounded, 35, 20),
+    'Dalandan': FruitInfo('Dalandan', Icons.circle_rounded, 75, 18),
+    'Dragon Fruit': FruitInfo(
+      'Dragon Fruit',
+      Icons.auto_awesome_rounded,
+      140,
+      8,
+    ),
+    'Durian': FruitInfo('Durian', Icons.energy_savings_leaf_rounded, 180, 6),
+    'Mangosteen': FruitInfo('Mangosteen', Icons.blur_circular_rounded, 160, 9),
+    'Rambutan': FruitInfo('Rambutan', Icons.scatter_plot_rounded, 120, 11),
+    'Lanzones': FruitInfo('Lanzones', Icons.scatter_plot_rounded, 120, 7),
+    'Chico': FruitInfo('Chico', Icons.spa_rounded, 80, 12),
+    'Atis': FruitInfo('Atis', Icons.eco_rounded, 95, 10),
+    'Santol': FruitInfo('Santol', Icons.trip_origin_rounded, 70, 14),
+    'Star Apple': FruitInfo('Star Apple', Icons.stars_rounded, 90, 9),
+    'Jackfruit': FruitInfo('Jackfruit', Icons.park_rounded, 65, 8),
+    'Tamarind': FruitInfo('Tamarind', Icons.grass_rounded, 75, 12),
+    'Melon': FruitInfo('Melon', Icons.blur_circular_rounded, 55, 16),
+    'Guyabano': FruitInfo('Guyabano', Icons.eco_rounded, 100, 8),
+    'Mango Carabao': FruitInfo('Mango Carabao', Icons.spa_rounded, 80, 14),
+    'Indian Mango': FruitInfo('Indian Mango', Icons.spa_rounded, 75, 12),
+    'Langkatan': FruitInfo('Langkatan', Icons.rice_bowl_rounded, 45, 9),
+    'Pear': FruitInfo('Pear', Icons.local_florist_rounded, 95, 11),
     'Strawberries': FruitInfo('Strawberries', Icons.favorite_rounded, 120, 8),
   };
 
-  static const Set<String> _scanReadyFruits = <String>{
-    'Apple',
-    'Banana',
-    'Grapes',
-    'Mango',
-    'Orange',
-  };
+  static final Set<String> _scanReadyFruits = _catalog.keys.toSet();
 
   static const List<String> _scanReadyFruitOrder = <String>[
     'Apple',
@@ -475,6 +495,34 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     'Banana',
     'Mango',
     'Grapes',
+    'Lemon',
+    'Papaya',
+    'Watermelon',
+    'Pineapple',
+    'Calamansi',
+    'Pomelo',
+    'Guava',
+    'Avocado',
+    'Coconut',
+    'Dalandan',
+    'Dragon Fruit',
+    'Durian',
+    'Mangosteen',
+    'Rambutan',
+    'Lanzones',
+    'Chico',
+    'Atis',
+    'Santol',
+    'Star Apple',
+    'Jackfruit',
+    'Tamarind',
+    'Melon',
+    'Guyabano',
+    'Mango Carabao',
+    'Indian Mango',
+    'Langkatan',
+    'Pear',
+    'Strawberries',
   ];
 
   static const List<_WalkthroughStep> _walkthroughSteps = <_WalkthroughStep>[
@@ -1056,6 +1104,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _formatTime(sale.soldAt),
       _displayStatus(sale.status),
       soldAt: sale.soldAt,
+      saleId: sale.id,
+      cloudId: sale.cloudId,
     );
   }
 
@@ -1074,7 +1124,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     final DateTime now = DateTime.now();
     final List<TransactionData> soldTransactions = _activeTransactionHistory
         .where((TransactionData transaction) {
-          if (transaction.status == 'Cancelled') {
+          if (!_isSoldTransaction(transaction)) {
             return false;
           }
           return _isGuestSession ||
@@ -3520,7 +3570,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       return;
     }
     if (!_scanReadyFruits.contains(fruit)) {
-      _toast('$fruit is not available for scanning yet.');
+      _toast('$fruit is not in the fruit catalog.');
       return;
     }
 
@@ -3565,7 +3615,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       oldPrice: 0,
       newPrice: savedPrice,
       source: 'local',
-      note: 'Added scan-ready fruit.',
+      note: 'Added catalog fruit.',
     );
     await _loadInventoryFromDatabase();
     await _loadPriceHistoryFromDatabase();
@@ -3906,7 +3956,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           analytics.averageLabel,
         ),
       ],
-      transactions: _activeTransactionHistory.map((
+      transactions: _visibleTransactionHistory.map((
         TransactionData transaction,
       ) {
         return ReportTransaction(
@@ -5840,14 +5890,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           ],
         ),
         const SizedBox(height: 10),
-        if (_activeTransactionHistory.isEmpty)
+        if (_visibleTransactionHistory.isEmpty)
           _emptyStateCard(
             icon: Icons.receipt_long_rounded,
             title: 'No sales yet',
             detail: 'Sales will appear here.',
           )
         else
-          ..._activeTransactionHistory.take(5).map((
+          ..._visibleTransactionHistory.take(5).map((
             TransactionData transaction,
           ) {
             return HistoryTransactionCard(transaction: transaction);
@@ -5903,17 +5953,201 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     );
   }
 
+  Future<void> _showTransactionActions(TransactionData transaction) async {
+    if (_isGuestSession) {
+      _showFullAccessRequired('History changes');
+      return;
+    }
+    if (transaction.saleId == null) {
+      _toast('This sale cannot be edited on this phone.');
+      return;
+    }
+
+    final bool cancelled = transaction.status == 'Cancelled';
+    final _TransactionHistoryAction?
+    action = await showModalBottomSheet<_TransactionHistoryAction>(
+      context: context,
+      backgroundColor: AppColors.bgCard,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+      ),
+      builder: (BuildContext sheetContext) {
+        return SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    const Expanded(child: SectionTitle('Manage sale')),
+                    IconButton(
+                      tooltip: 'Close',
+                      onPressed: () => Navigator.of(sheetContext).pop(),
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+                Text(
+                  '${transaction.fruit} - ${transaction.weight} - ${transaction.price}',
+                  style: const TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                ListTile(
+                  leading: Icon(
+                    cancelled ? Icons.restore_rounded : Icons.cancel_outlined,
+                    color: cancelled
+                        ? AppColors.greenText
+                        : AppColors.orangeText,
+                  ),
+                  title: Text(cancelled ? 'Restore sale' : 'Cancel sale'),
+                  subtitle: Text(
+                    cancelled
+                        ? 'Count this sale in analytics and restock signals again.'
+                        : 'Keep it visible as Void, but exclude it from analytics and restock signals.',
+                  ),
+                  onTap: () => Navigator.of(sheetContext).pop(
+                    cancelled
+                        ? _TransactionHistoryAction.restore
+                        : _TransactionHistoryAction.cancel,
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(
+                    Icons.delete_outline_rounded,
+                    color: AppColors.pinkText,
+                  ),
+                  title: const Text('Remove from history'),
+                  subtitle: const Text(
+                    'Hide this sale from history, reports, analytics, and forecasts.',
+                  ),
+                  onTap: () => Navigator.of(
+                    sheetContext,
+                  ).pop(_TransactionHistoryAction.remove),
+                ),
+                ListTile(
+                  leading: const Icon(
+                    Icons.check_circle_outline_rounded,
+                    color: AppColors.textSecondary,
+                  ),
+                  title: Text(cancelled ? 'Keep as void' : 'Keep sale'),
+                  subtitle: const Text('Leave this transaction unchanged.'),
+                  onTap: () => Navigator.of(
+                    sheetContext,
+                  ).pop(_TransactionHistoryAction.keep),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    switch (action) {
+      case _TransactionHistoryAction.cancel:
+        await _updateTransactionStatus(
+          transaction,
+          status: 'cancelled',
+          successMessage:
+              '${transaction.fruit} sale marked void. Analytics updated.',
+        );
+        return;
+      case _TransactionHistoryAction.restore:
+        await _updateTransactionStatus(
+          transaction,
+          status: 'sold',
+          successMessage: '${transaction.fruit} sale restored.',
+        );
+        return;
+      case _TransactionHistoryAction.remove:
+        final bool confirmed = await _confirmRemoveTransaction(transaction);
+        if (!confirmed) {
+          return;
+        }
+        await _updateTransactionStatus(
+          transaction,
+          status: 'removed',
+          successMessage: '${transaction.fruit} sale removed from history.',
+        );
+        return;
+      case _TransactionHistoryAction.keep:
+      case null:
+        return;
+    }
+  }
+
+  Future<bool> _confirmRemoveTransaction(TransactionData transaction) async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          backgroundColor: AppColors.bgCard,
+          title: const Text('Remove sale?'),
+          content: Text(
+            'This hides ${transaction.fruit} from history, analytics, forecasts, and reports. A removed sync record is kept so cloud sync will not add it back.',
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 13,
+              height: 1.4,
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Keep'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: AppColors.pink,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Remove'),
+            ),
+          ],
+        );
+      },
+    );
+    return confirmed ?? false;
+  }
+
+  Future<void> _updateTransactionStatus(
+    TransactionData transaction, {
+    required String status,
+    required String successMessage,
+  }) async {
+    final int? saleId = transaction.saleId;
+    if (saleId == null) {
+      _toast('This sale cannot be edited on this phone.');
+      return;
+    }
+    await _database.updateSaleStatus(id: saleId, status: status);
+    await _loadTransactionsFromDatabase();
+    unawaited(_syncTransactionsToFirebase());
+    if (!mounted) {
+      return;
+    }
+    _toast(successMessage);
+  }
+
   Widget _transactionHistoryScreen() {
-    final List<TransactionData> transactions = _activeTransactionHistory;
-    final int sold = transactions
-        .where((TransactionData item) => item.status != 'Cancelled')
+    final List<TransactionData> transactions = _visibleTransactionHistory;
+    final int sold = transactions.where(_isSoldTransaction).length;
+    final int cancelled = transactions
+        .where((TransactionData item) => item.status == 'Cancelled')
         .length;
-    final int cancelled = transactions.length - sold;
     final int salesTotal = transactions.fold<int>(0, (
       int sum,
       TransactionData transaction,
     ) {
-      if (transaction.status == 'Cancelled') {
+      if (!_isSoldTransaction(transaction)) {
         return sum;
       }
       return sum + _parsePesoAmount(transaction.price);
@@ -5999,7 +6233,12 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   ),
                 ]
               : transactions.map((TransactionData transaction) {
-                  return HistoryTransactionCard(transaction: transaction);
+                  return HistoryTransactionCard(
+                    transaction: transaction,
+                    onManage: _isGuestSession || transaction.saleId == null
+                        ? null
+                        : () => unawaited(_showTransactionActions(transaction)),
+                  );
                 }).toList(),
         ),
       ],
@@ -6133,7 +6372,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               const SizedBox(width: 10),
               const Expanded(
                 child: Text(
-                  'Choose the scan-ready fruits this vendor sells, then set the price per kg.',
+                  'Choose the fruits this vendor sells, including Philippine tropical options, then set the price per kg.',
                   style: TextStyle(
                     color: AppColors.textSecondary,
                     fontSize: 12,
@@ -6369,7 +6608,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     const Text(
-                      'Scan-ready pricing',
+                      'Catalog pricing',
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w900,
@@ -6405,7 +6644,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     width: _tileWidth(constraints.maxWidth, wide ? 3 : 1, 8),
                     icon: Icons.shopping_basket_rounded,
                     label: 'Active fruits',
-                    value: '${_managedFruits.length}/5',
+                    value:
+                        '${_managedFruits.length}/${_scanReadyFruitOrder.length}',
                   ),
                   _inventoryMetricTile(
                     width: _tileWidth(constraints.maxWidth, wide ? 3 : 1, 8),
@@ -7345,7 +7585,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     int analyzedCount = 0;
 
     for (final TransactionData transaction in _activeTransactionHistory) {
-      if (transaction.status == 'Cancelled' ||
+      if (!_isSoldTransaction(transaction) ||
           !_scanReadyFruits.contains(transaction.fruit)) {
         continue;
       }
@@ -7556,7 +7796,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     final List<_AnalyticsSale> sales = <_AnalyticsSale>[];
     for (int index = 0; index < _activeTransactionHistory.length; index++) {
       final TransactionData transaction = _activeTransactionHistory[index];
-      if (transaction.status == 'Cancelled') {
+      if (!_isSoldTransaction(transaction)) {
         continue;
       }
       DateTime? soldAt = transaction.soldAt;
@@ -8607,6 +8847,8 @@ class TransactionData {
     this.time,
     this.status, {
     this.soldAt,
+    this.saleId,
+    this.cloudId,
   });
 
   final String fruit;
@@ -8616,6 +8858,8 @@ class TransactionData {
   final String time;
   final String status;
   final DateTime? soldAt;
+  final int? saleId;
+  final String? cloudId;
 }
 
 class DashboardStats {
@@ -8932,7 +9176,7 @@ String _priceInputFromCentavos(int centavos) {
 int? _parsePriceInputCentavos(String value) {
   final String clean = value
       .trim()
-      .replaceAll(RegExp(r'(?i)php'), '')
+      .replaceAll(RegExp(r'php', caseSensitive: false), '')
       .replaceAll(',', '')
       .replaceAll(' ', '');
   if (clean.isEmpty) {
@@ -9004,10 +9248,17 @@ String _shortDateTime(DateTime date) {
 
 String _displayStatus(String status) {
   final String clean = status.trim().toLowerCase();
+  if (clean == 'removed') {
+    return 'Removed';
+  }
   if (clean == 'cancelled' || clean == 'canceled') {
     return 'Cancelled';
   }
   return 'Sold';
+}
+
+bool _isSoldTransaction(TransactionData transaction) {
+  return transaction.status == 'Sold';
 }
 
 bool _isSameDay(DateTime a, DateTime b) {
@@ -10997,13 +11248,15 @@ class _InventoryFruitCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 9),
                 SmartStepper(
-                  label: 'Price / kg',
+                  label: 'Enter price / kg',
                   value: price > 0 ? money(price) : 'Set price',
                   controller: priceController,
                   focusNode: priceFocusNode,
                   hint: '90.00',
                   enabled: !readOnly,
                   onChanged: onPriceTyped,
+                  onSubmitted: (_) => onSave(),
+                  textInputAction: TextInputAction.done,
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
@@ -11095,6 +11348,8 @@ class SmartStepper extends StatelessWidget {
     this.hint,
     this.enabled = true,
     this.onChanged,
+    this.onSubmitted,
+    this.textInputAction,
     this.keyboardType,
     this.inputFormatters,
   });
@@ -11108,6 +11363,8 @@ class SmartStepper extends StatelessWidget {
   final String? hint;
   final bool enabled;
   final ValueChanged<String>? onChanged;
+  final ValueChanged<String>? onSubmitted;
+  final TextInputAction? textInputAction;
   final TextInputType? keyboardType;
   final List<TextInputFormatter>? inputFormatters;
 
@@ -11148,8 +11405,10 @@ class SmartStepper extends StatelessWidget {
                     focusNode: focusNode,
                     enabled: enabled,
                     keyboardType: keyboardType,
+                    textInputAction: textInputAction,
                     inputFormatters: inputFormatters,
                     onChanged: onChanged,
+                    onSubmitted: onSubmitted,
                     style: TextStyle(
                       color: enabled
                           ? AppColors.textPrimary
@@ -11416,13 +11675,19 @@ class ForecastTile extends StatelessWidget {
 }
 
 class HistoryTransactionCard extends StatelessWidget {
-  const HistoryTransactionCard({super.key, required this.transaction});
+  const HistoryTransactionCard({
+    super.key,
+    required this.transaction,
+    this.onManage,
+  });
 
   final TransactionData transaction;
+  final VoidCallback? onManage;
 
   @override
   Widget build(BuildContext context) {
     final bool cancelled = transaction.status == 'Cancelled';
+    final VoidCallback? manageAction = onManage;
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
@@ -11490,6 +11755,21 @@ class HistoryTransactionCard extends StatelessWidget {
                   : const StatusBadge.green('Done'),
             ],
           ),
+          if (manageAction != null) ...<Widget>[
+            const SizedBox(width: 4),
+            IconButton(
+              tooltip: 'Manage sale',
+              constraints: const BoxConstraints.tightFor(width: 34, height: 34),
+              padding: EdgeInsets.zero,
+              visualDensity: VisualDensity.compact,
+              onPressed: manageAction,
+              icon: const Icon(
+                Icons.more_vert_rounded,
+                color: AppColors.textSecondary,
+                size: 20,
+              ),
+            ),
+          ],
         ],
       ),
     );
