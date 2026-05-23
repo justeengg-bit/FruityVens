@@ -5,6 +5,12 @@ import 'package:flutter/foundation.dart'
 class DefaultFirebaseOptions {
   const DefaultFirebaseOptions._();
 
+  static const String _databaseURL = String.fromEnvironment(
+    'FRUITYVENS_DATABASE_URL',
+    defaultValue:
+        'https://fruityv-default-rtdb.asia-southeast1.firebasedatabase.app',
+  );
+
   static FirebaseOptions get currentPlatform {
     if (kIsWeb) {
       throw UnsupportedError(
@@ -28,6 +34,7 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyBnQ7Gp-QQuuZgX6zMiDCGlCDAe_pEwUEs',
+    databaseURL: _databaseURL,
     projectId: 'fruityv',
     storageBucket: 'fruityv.firebasestorage.app',
     messagingSenderId: '877154452010',

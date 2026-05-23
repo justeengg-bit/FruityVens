@@ -180,12 +180,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   static const String _phoneLinkEnabledKey = 'phone_link_enabled';
   static const String _phoneLinkPinKey = 'phone_link_pin_secret';
   static const String _fruitDetectionModelKey = 'fruit_detection_model_id';
-  static const String _scaleApiBaseUrlKey = 'scale_api_base_url';
+  static const String _scaleDeviceIdKey = 'scale_device_id';
   static const String _fruitDetectionAutoMode = 'auto';
   static const String _inventoryPriceConfiguredPrefix =
       'inventory_price_configured_';
-  static const String _defaultScaleApiBaseUrl = String.fromEnvironment(
-    'FRUITYVENS_SCALE_BASE_URL',
+  static const String _defaultScaleDeviceId = String.fromEnvironment(
+    'FRUITYVENS_SCALE_DEVICE_ID',
+    defaultValue: 'fruityvens-scale-01',
   );
   static const String _googleServerClientId = String.fromEnvironment(
     'FRUITYVENS_GOOGLE_SERVER_CLIENT_ID',
@@ -269,7 +270,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   String? _expandedInventoryFruit;
   String? _priceConflictNotice;
   String _scaleBaseUrl = '';
-  String _scaleLogStatus = 'Scale log not configured';
+  String _scaleLogStatus = 'Scale device not configured';
   bool _scaleLogSyncRunning = false;
   DateTime? _lastScaleLogSyncAt;
   List<TransactionData> _realTransactionHistory = <TransactionData>[];
@@ -640,18 +641,19 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   }
 
   Future<void> _loadScaleLogSettings() async {
-    final String? savedUrl = await _database.getSetting(_scaleApiBaseUrlKey);
-    final String scaleUrl = (savedUrl ?? _defaultScaleApiBaseUrl).trim();
+    final String? savedDeviceId = await _database.getSetting(_scaleDeviceIdKey);
+    final String scaleDeviceId = (savedDeviceId ?? _defaultScaleDeviceId)
+        .trim();
     if (!mounted) {
       return;
     }
     setState(() {
-      _scaleBaseUrl = scaleUrl;
-      _scaleLogStatus = scaleUrl.isEmpty
-          ? 'Scale log not configured'
-          : 'Scale log sync ready';
+      _scaleBaseUrl = scaleDeviceId;
+      _scaleLogStatus = scaleDeviceId.isEmpty
+          ? 'Scale device not configured'
+          : 'Firebase scale sync ready';
     });
-    _scaleBaseUrlController.text = scaleUrl;
+    _scaleBaseUrlController.text = scaleDeviceId;
     _startScaleLogMonitor();
   }
 
@@ -676,29 +678,23 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   }
 
   Future<void> _saveScaleBaseUrl({StateSetter? dialogSetState}) async {
-    final String nextUrl = _scaleBaseUrlController.text.trim();
-    if (nextUrl.isNotEmpty) {
-      final Uri? parsed = Uri.tryParse(nextUrl);
-      if (parsed == null || !parsed.hasScheme || parsed.host.isEmpty) {
-        _toast('Enter a valid scale URL like http://192.168.1.25.');
-        return;
-      }
-    }
-
-    await _database.saveSetting(_scaleApiBaseUrlKey, nextUrl);
+    final String nextDeviceId = _scaleBaseUrlController.text.trim();
+    await _database.saveSetting(_scaleDeviceIdKey, nextDeviceId);
     if (!mounted) {
       return;
     }
     setState(() {
-      _scaleBaseUrl = nextUrl;
-      _scaleLogStatus = nextUrl.isEmpty
-          ? 'Scale log not configured'
-          : 'Scale log sync ready';
+      _scaleBaseUrl = nextDeviceId;
+      _scaleLogStatus = nextDeviceId.isEmpty
+          ? 'Scale device not configured'
+          : 'Firebase scale sync ready';
     });
     dialogSetState?.call(() {});
     _startScaleLogMonitor();
     _toast(
-      nextUrl.isEmpty ? 'Scale log sync disabled.' : 'Scale log sync saved.',
+      nextDeviceId.isEmpty
+          ? 'Scale Firebase sync disabled.'
+          : 'Scale device sync saved.',
     );
   }
 
@@ -726,18 +722,18 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         _scaleBaseUrl,
       );
       int imported = 0;
-      final List<int> acknowledgedIds = <int>[];
+      final List<ScaleSaleLog> acknowledgedLogs = <ScaleSaleLog>[];
       for (final ScaleSaleLog log in logs) {
         final bool saved = await _saveScaleSaleLog(log);
         if (saved) {
           imported++;
         }
-        acknowledgedIds.add(log.id);
+        acknowledgedLogs.add(log);
       }
-      if (acknowledgedIds.isNotEmpty) {
+      if (acknowledgedLogs.isNotEmpty) {
         await _scaleLogService.acknowledgeSales(
-          baseUrl: _scaleBaseUrl,
-          saleIds: acknowledgedIds,
+          deviceId: _scaleBaseUrl,
+          sales: acknowledgedLogs,
         );
       }
       if (imported > 0) {
@@ -751,19 +747,19 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       setState(() {
         _lastScaleLogSyncAt = syncedAt;
         _scaleLogStatus = imported == 0
-            ? 'Scale logs checked ${_formatTime(syncedAt)}'
-            : 'Imported and acknowledged $imported sale${imported == 1 ? '' : 's'}';
+            ? 'Firebase scale checked ${_formatTime(syncedAt)}'
+            : 'Imported $imported Firebase scale sale${imported == 1 ? '' : 's'}';
       });
       if (showToast) {
         _toast(
           imported == 0
-              ? 'No new confirmed scale sales.'
-              : 'Imported and cleared $imported scale sale${imported == 1 ? '' : 's'}.',
+              ? 'No new Firebase scale sales.'
+              : 'Imported $imported Firebase scale sale${imported == 1 ? '' : 's'}.',
         );
       }
     } on ScaleLogException catch (error, stackTrace) {
       developer.log(
-        'Scale log sync failed',
+        'Firebase scale sync failed',
         name: 'FruityVensScale',
         error: error,
         stackTrace: stackTrace,
@@ -788,10 +784,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         return;
       }
       setState(() {
-        _scaleLogStatus = 'Scale log sync failed.';
+        _scaleLogStatus = 'Firebase scale sync failed.';
       });
       if (showToast) {
-        _toast('Scale log sync failed: $error');
+        _toast('Firebase scale sync failed: $error');
       }
     } finally {
       if (mounted) {
@@ -5698,7 +5694,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                   children: <Widget>[
                                     const Expanded(
                                       child: Text(
-                                        'Scale log sync',
+                                        'Firebase scale sync',
                                         style: TextStyle(
                                           fontSize: 14,
                                           fontWeight: FontWeight.w800,
@@ -5740,10 +5736,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       const SizedBox(height: 10),
                       AppTextField(
                         controller: _scaleBaseUrlController,
-                        label: 'Scale API URL',
-                        hint: 'http://192.168.1.25',
-                        keyboardType: TextInputType.url,
-                        prefixIcon: Icons.link_rounded,
+                        label: 'Scale device ID',
+                        hint: 'fruityvens-scale-01',
+                        keyboardType: TextInputType.text,
+                        prefixIcon: Icons.badge_rounded,
                         textInputAction: TextInputAction.done,
                         onSubmitted: (_) => unawaited(
                           _saveScaleBaseUrl(dialogSetState: setDialogState),
@@ -5766,7 +5762,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                           const SizedBox(width: 8),
                           Expanded(
                             child: GhostButton(
-                              label: 'Fetch logs',
+                              label: 'Fetch Firebase',
                               icon: Icons.sync_rounded,
                               highlighted: true,
                               onPressed: _scaleLogSyncRunning
