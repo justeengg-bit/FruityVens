@@ -4551,7 +4551,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       case AppScreen.analytics:
         return _analyticsNav();
       case AppScreen.transactions:
-        return _subNav(title: 'History');
+        return _historyNav();
       case AppScreen.dashboard:
         return _dashboardNav();
       case AppScreen.walkthrough:
@@ -6432,43 +6432,56 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       children: <Widget>[
         AppCard(
           padding: const EdgeInsets.all(14),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: AppColors.orange.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(
-                  Icons.receipt_long_rounded,
-                  color: AppColors.orangeText,
-                  size: 21,
-                ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: AppColors.orange.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(
+                      Icons.receipt_long_rounded,
+                      color: AppColors.orangeText,
+                      size: 21,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          dateLabel,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _formatDate(selectedDate),
+                          style: const TextStyle(
+                            color: AppColors.textSecondary,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      dateLabel,
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      _formatDate(selectedDate),
-                      style: const TextStyle(
-                        color: AppColors.textSecondary,
-                        fontSize: 12,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Wrap(
+              const SizedBox(height: 10),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: <Widget>[
+                  Expanded(
+                    child: Wrap(
                       spacing: 7,
                       runSpacing: 6,
                       children: <Widget>[
@@ -6477,59 +6490,28 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                           StatusBadge.orange('$cancelled cancelled'),
                       ],
                     ),
-                  ],
-                ),
-              ),
-              IconButton(
-                tooltip: 'Pick history date',
-                constraints: const BoxConstraints.tightFor(
-                  width: 36,
-                  height: 36,
-                ),
-                padding: EdgeInsets.zero,
-                visualDensity: VisualDensity.compact,
-                onPressed: () => unawaited(_pickHistoryDate()),
-                icon: const Icon(
-                  Icons.calendar_month_rounded,
-                  color: AppColors.textSecondary,
-                  size: 20,
-                ),
-              ),
-              if (!selectedToday)
-                IconButton(
-                  tooltip: 'Show today',
-                  constraints: const BoxConstraints.tightFor(
-                    width: 36,
-                    height: 36,
                   ),
-                  padding: EdgeInsets.zero,
-                  visualDensity: VisualDensity.compact,
-                  onPressed: _showTodayHistory,
-                  icon: const Icon(
-                    Icons.today_rounded,
-                    color: AppColors.orangeText,
-                    size: 20,
-                  ),
-                ),
-              const SizedBox(width: 6),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: <Widget>[
-                  const Text(
-                    'Sales',
-                    style: TextStyle(
-                      color: AppColors.textSecondary,
-                      fontSize: 11,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    money(salesTotal),
-                    style: const TextStyle(
-                      color: AppColors.orangeText,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                    ),
+                  const SizedBox(width: 10),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: <Widget>[
+                      const Text(
+                        'Sales',
+                        style: TextStyle(
+                          color: AppColors.textSecondary,
+                          fontSize: 11,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        money(salesTotal),
+                        style: const TextStyle(
+                          color: AppColors.orangeText,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -9033,6 +9015,29 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       onBack: () => _show(AppScreen.dashboard),
       titleSidePadding: actions.length > 1 ? 108 : 56,
       trailing: actions,
+    );
+  }
+
+  Widget _historyNav() {
+    final bool selectedToday = _isSameDay(_selectedHistoryDate, DateTime.now());
+    return _subNav(
+      title: 'History',
+      actions: <Widget>[
+        _topBarIconButton(
+          tooltip: 'Pick history date',
+          icon: Icons.calendar_month_rounded,
+          onPressed: () => unawaited(_pickHistoryDate()),
+        ),
+        if (!selectedToday) ...<Widget>[
+          const SizedBox(width: 8),
+          _topBarIconButton(
+            tooltip: 'Show today',
+            icon: Icons.today_rounded,
+            highlighted: true,
+            onPressed: _showTodayHistory,
+          ),
+        ],
+      ],
     );
   }
 
@@ -12211,6 +12216,9 @@ class HistoryTransactionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bool cancelled = transaction.status == 'Cancelled';
+    final IconData fruitIcon =
+        _FruityVensHomeState._catalog[transaction.fruit]?.icon ??
+        Icons.local_florist_rounded;
     final VoidCallback? manageAction = onManage;
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -12232,9 +12240,7 @@ class HistoryTransactionCard extends StatelessWidget {
               borderRadius: BorderRadius.circular(8),
             ),
             child: Icon(
-              cancelled
-                  ? Icons.cancel_outlined
-                  : Icons.check_circle_outline_rounded,
+              fruitIcon,
               color: cancelled ? AppColors.pinkText : AppColors.greenText,
               size: 18,
             ),
