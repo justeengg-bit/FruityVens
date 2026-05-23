@@ -191,6 +191,12 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   static const String _googleServerClientId = String.fromEnvironment(
     'FRUITYVENS_GOOGLE_SERVER_CLIENT_ID',
   );
+  static const List<String> _internetProbeHosts = <String>[
+    'firebase.googleapis.com',
+    'generativelanguage.googleapis.com',
+    'accounts.google.com',
+    'google.com',
+  ];
   static const MethodChannel _deviceProfileChannel = MethodChannel(
     'fruityvens_app/device_profile',
   );
@@ -3502,10 +3508,27 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
   Future<bool> _hasInternetConnection() async {
     try {
+      final List<bool> probes =
+          await Future.wait(
+            _internetProbeHosts.map(_canResolveInternetHost),
+          ).timeout(
+            const Duration(seconds: 3),
+            onTimeout: () => const <bool>[false],
+          );
+      return probes.any((bool connected) => connected);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _canResolveInternetHost(String host) async {
+    try {
       final List<InternetAddress> result = await InternetAddress.lookup(
-        'accounts.google.com',
-      ).timeout(const Duration(seconds: 3));
-      return result.isNotEmpty && result.first.rawAddress.isNotEmpty;
+        host,
+      ).timeout(const Duration(seconds: 2));
+      return result.any(
+        (InternetAddress address) => address.rawAddress.isNotEmpty,
+      );
     } on SocketException {
       return false;
     } on TimeoutException {
@@ -4198,20 +4221,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       return;
     }
 
-    final bool online = await _hasInternetConnection();
-    if (!mounted) {
-      return;
-    }
-    if (!online) {
-      const String message =
-          'Forecasting needs an internet connection and the AI service. Connect to the internet, then try Generate again.';
-      setState(() {
-        _latestAiError = message;
-      });
-      _toast(message);
-      return;
-    }
-
     setState(() {
       _forecastGenerating = true;
       _latestAiError = null;
@@ -4433,9 +4442,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         cleanError.contains('connection') ||
         cleanError.contains('network') ||
         cleanError.contains('internet')) {
-      return 'Forecasting needs an internet connection and the AI service. Connect to the internet, then try Generate again.';
+      return 'FruityVens could not reach Firebase AI. If your internet is already on, check Firebase AI Logic or App Check setup, then try Generate again.';
     }
-    return 'Forecasting is unavailable right now. Connect to the internet and try again.';
+    return 'Forecasting is unavailable right now. Check Firebase AI setup or your connection, then try again.';
   }
 
   @override
@@ -7773,7 +7782,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       ? const StatusBadge.blue('Demo')
                       : _latestAiError == null
                       ? const StatusBadge.green('Ready')
-                      : const StatusBadge.orange('Needs internet'),
+                      : const StatusBadge.orange('Check AI'),
                 ],
               ),
               if (_forecastGenerating)
