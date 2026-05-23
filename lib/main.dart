@@ -13,7 +13,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:local_auth/local_auth.dart';
-import 'package:permission_handler/permission_handler.dart';
 
 import 'data/app_database.dart';
 import 'firebase_options.dart';
@@ -3707,71 +3706,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     }
   }
 
-  Future<PermissionStatus> _requestPermissionWhenNeeded(
-    Permission permission,
-  ) async {
-    final PermissionStatus status = await permission.status;
-    if (status.isGranted ||
-        status.isLimited ||
-        status.isPermanentlyDenied ||
-        status.isRestricted) {
-      return status;
-    }
-    return permission.request();
-  }
-
-  Future<bool> _requestCameraNetworkAccess({bool showToast = true}) async {
-    if (!Platform.isAndroid) {
-      return true;
-    }
-
-    try {
-      final PermissionStatus wifiStatus = await _requestPermissionWhenNeeded(
-        Permission.nearbyWifiDevices,
-      );
-      final PermissionStatus locationStatus =
-          await _requestPermissionWhenNeeded(Permission.locationWhenInUse);
-      final bool granted = wifiStatus.isGranted || locationStatus.isGranted;
-      if (granted) {
-        return true;
-      }
-      if (wifiStatus.isPermanentlyDenied ||
-          locationStatus.isPermanentlyDenied) {
-        if (showToast) {
-          _toast(
-            'Nearby Wi-Fi permission is disabled. Enable it to connect the camera AP.',
-            actionLabel: 'Settings',
-            onAction: openAppSettings,
-          );
-        }
-        return false;
-      }
-      if (showToast) {
-        _toast(
-          'Nearby Wi-Fi permission is needed to connect the ESP32-CAM AP.',
-        );
-      }
-      return false;
-    } on MissingPluginException {
-      return true;
-    }
-  }
-
   Future<void> _connectCameraEye({bool showToast = true}) async {
     if (_cameraEyeBusy) {
-      return;
-    }
-    final bool hasAccess = await _requestCameraNetworkAccess(
-      showToast: showToast,
-    );
-    if (!hasAccess || !mounted) {
-      if (!showToast && mounted) {
-        setState(() {
-          _cameraEyeStatus = const CameraEyeStatus.error(
-            'Nearby Wi-Fi permission is needed to connect the ESP32-CAM AP.',
-          );
-        });
-      }
       return;
     }
 
@@ -4094,7 +4030,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               'processingModelId': _fruitDetectionModel.id,
               'processingModelAsset': _fruitDetectionModel.assetPath,
               'deviceTier': _deviceTierName,
-              'mode': 'backend-only stream source; no live preview in app',
+              'mode': 'LAN snapshot preview through ESP32-CAM',
             },
           );
       if (!mounted) {
@@ -7098,6 +7034,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             Animation<double> secondaryAnimation,
           ) {
             String? panelNotice;
+            bool previewOpen = false;
             return StatefulBuilder(
               builder: (BuildContext context, StateSetter setDialogState) {
                 Future<void> runCameraAction(
@@ -7204,7 +7141,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                       runSpacing: 8,
                                       children: <Widget>[
                                         StatusBadge.blue(
-                                          'SSID ${CameraEyeService.ssid}',
+                                          'Host ${CameraEyeService.host}',
                                         ),
                                         StatusBadge.blue(
                                           'Current ${_cameraEyeStatus.currentSsid}',
@@ -7232,11 +7169,16 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                         crossAxisAlignment:
                                             CrossAxisAlignment.start,
                                         children: <Widget>[
-                                          const SectionLabel('AI stream route'),
+                                          const SectionLabel('Camera route'),
                                           const SizedBox(height: 8),
                                           _cameraInfoRow(
-                                            'Stream',
-                                            _cameraEyeStatus.streamUrl,
+                                            'Host',
+                                            CameraEyeService.baseUrl,
+                                          ),
+                                          const SizedBox(height: 6),
+                                          _cameraInfoRow(
+                                            'Snapshot',
+                                            _cameraEyeStatus.snapshotUrl,
                                           ),
                                           const SizedBox(height: 6),
                                           _cameraInfoRow(
@@ -7272,14 +7214,25 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                         ),
                                         borderRadius: BorderRadius.circular(8),
                                       ),
-                                      child: const Text(
-                                        'Live preview will be added once the camera stream is stable. For now, the app checks the ESP32-CAM route and sends its status into AI forecasting.',
-                                        style: TextStyle(
-                                          color: AppColors.textSecondary,
-                                          fontSize: 12,
-                                          height: 1.35,
-                                        ),
-                                      ),
+                                      child: previewOpen
+                                          ? _CameraEyeSnapshotPreview(
+                                              service: _cameraEyeService,
+                                              onNotice: (String message) {
+                                                if (dialogContext.mounted) {
+                                                  setDialogState(() {
+                                                    panelNotice = message;
+                                                  });
+                                                }
+                                              },
+                                            )
+                                          : const Text(
+                                              'Preview pulls camera snapshots from the ESP32-CAM while preview or scale detection is active. When detection finishes, the camera returns to idle.',
+                                              style: TextStyle(
+                                                color: AppColors.textSecondary,
+                                                fontSize: 12,
+                                                height: 1.35,
+                                              ),
+                                            ),
                                     ),
                                     if (panelNotice != null) ...<Widget>[
                                       const SizedBox(height: 12),
@@ -7374,6 +7327,24 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                                     showToast: false,
                                                   ),
                                                 ),
+                                        ),
+                                        GhostButton(
+                                          label: previewOpen
+                                              ? 'Hide preview'
+                                              : 'Preview',
+                                          icon: previewOpen
+                                              ? Icons.visibility_off_rounded
+                                              : Icons.visibility_rounded,
+                                          onPressed: _cameraEyeBusy
+                                              ? null
+                                              : () {
+                                                  setDialogState(() {
+                                                    previewOpen = !previewOpen;
+                                                    panelNotice = previewOpen
+                                                        ? 'Opening ESP32-CAM preview...'
+                                                        : 'Camera preview closed.';
+                                                  });
+                                                },
                                         ),
                                         GhostButton(
                                           label: 'Release',
@@ -8845,6 +8816,133 @@ class AppColors {
     palmDark,
     textMuted,
   ];
+}
+
+class _CameraEyeSnapshotPreview extends StatefulWidget {
+  const _CameraEyeSnapshotPreview({
+    required this.service,
+    required this.onNotice,
+  });
+
+  final CameraEyeService service;
+  final ValueChanged<String> onNotice;
+
+  @override
+  State<_CameraEyeSnapshotPreview> createState() =>
+      _CameraEyeSnapshotPreviewState();
+}
+
+class _CameraEyeSnapshotPreviewState extends State<_CameraEyeSnapshotPreview> {
+  Timer? _timer;
+  Uint8List? _imageBytes;
+  String _message = 'Starting ESP32-CAM preview...';
+  bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_startPreview());
+  }
+
+  Future<void> _startPreview() async {
+    try {
+      await widget.service.startPreview();
+      if (!mounted) {
+        return;
+      }
+      widget.onNotice('ESP32-CAM preview started.');
+      setState(() {
+        _message = 'Live snapshot preview';
+      });
+      await _loadFrame();
+      _timer = Timer.periodic(
+        const Duration(milliseconds: 900),
+        (_) => _loadFrame(),
+      );
+    } on CameraEyeException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      widget.onNotice(error.message);
+      setState(() {
+        _message = error.message;
+      });
+    }
+  }
+
+  Future<void> _loadFrame() async {
+    if (_loading) {
+      return;
+    }
+    _loading = true;
+    try {
+      final Uint8List bytes = await widget.service.fetchSnapshot();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _imageBytes = bytes;
+        _message = 'Live snapshot preview';
+      });
+    } on CameraEyeException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _message = error.message;
+      });
+    } finally {
+      _loading = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    unawaited(widget.service.stopPreview());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Uint8List? bytes = _imageBytes;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: AspectRatio(
+            aspectRatio: 4 / 3,
+            child: Container(
+              color: Colors.black,
+              alignment: Alignment.center,
+              child: bytes == null
+                  ? const CircularProgressIndicator(
+                      color: AppColors.orangeText,
+                      strokeWidth: 2,
+                    )
+                  : Image.memory(
+                      bytes,
+                      fit: BoxFit.contain,
+                      gaplessPlayback: true,
+                      width: double.infinity,
+                      height: double.infinity,
+                    ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          _message,
+          style: const TextStyle(
+            color: AppColors.textSecondary,
+            fontSize: 12,
+            height: 1.35,
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class _WalkthroughStep {
