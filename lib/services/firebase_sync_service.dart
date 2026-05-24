@@ -304,6 +304,42 @@ class FirebaseSyncService {
     );
   }
 
+  Future<void> publishScalePriceUpdate({
+    required String scaleDeviceId,
+    required String fruitName,
+    required int priceCentavos,
+    String? sourceDeviceId,
+  }) async {
+    final FirebaseDatabase? database = _database;
+    final String cleanScaleDeviceId = scaleDeviceId.trim();
+    final String cleanFruitName = fruitName.trim();
+    if (database == null ||
+        cleanScaleDeviceId.isEmpty ||
+        cleanFruitName.isEmpty ||
+        priceCentavos <= 0) {
+      return;
+    }
+
+    final int version = DateTime.now().millisecondsSinceEpoch;
+    final Map<String, Object?> payload = <String, Object?>{
+      'fruit': cleanFruitName,
+      'price': priceCentavos / 100,
+      'priceCentavos': priceCentavos,
+      'priceUnit': 'centavos',
+      'version': version,
+      if (sourceDeviceId != null && sourceDeviceId.trim().isNotEmpty)
+        'sourceDeviceId': sourceDeviceId.trim(),
+      'updatedAt': ServerValue.timestamp,
+    };
+    final String scaleKey = _databaseKey(cleanScaleDeviceId);
+    final String fruitKey = _databaseKey(cleanFruitName);
+
+    await database.ref().update(<String, Object?>{
+      'scalePriceUpdates/$scaleKey/latest': payload,
+      'scalePriceUpdates/$scaleKey/fruits/$fruitKey': payload,
+    });
+  }
+
   Future<void> registerDevice({
     required String deviceId,
     required String deviceName,

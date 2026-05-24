@@ -2164,6 +2164,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     }
     try {
       await _firebaseSyncService.syncFruit(_fruitSyncPayload(fruit));
+      await _publishScalePriceUpdate(fruit);
       await _database.markFruitSynced(fruit);
       if (!mounted) {
         return;
@@ -2196,6 +2197,24 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         _cloudSyncStatus = 'Firebase sync paused';
       });
     }
+  }
+
+  Future<void> _publishScalePriceUpdate(String fruit) async {
+    final int? priceCentavos = _inventorySavedPrice(fruit);
+    final String scaleDeviceId = _scaleBaseUrl.trim();
+    if (priceCentavos == null ||
+        priceCentavos <= 0 ||
+        scaleDeviceId.isEmpty ||
+        _firebaseSyncService.currentUserId == null) {
+      return;
+    }
+    final String deviceId = _deviceId ?? await _loadDeviceId();
+    await _firebaseSyncService.publishScalePriceUpdate(
+      scaleDeviceId: scaleDeviceId,
+      fruitName: fruit,
+      priceCentavos: priceCentavos,
+      sourceDeviceId: deviceId,
+    );
   }
 
   void _show(AppScreen screen) {
