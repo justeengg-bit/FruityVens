@@ -22,6 +22,7 @@ import 'services/firebase_sync_service.dart';
 import 'services/fruit_detection_service.dart';
 import 'services/report_export_service.dart';
 import 'services/scale_log_service.dart';
+import 'widgets/fruit_mark.dart';
 
 final GlobalKey<ScaffoldMessengerState> fruityVensMessengerKey =
     GlobalKey<ScaffoldMessengerState>();
@@ -4394,7 +4395,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       final FruitRank fruit = entry.value;
       return switch (rank) {
         1 => _ForecastRecommendation(
-          icon: fruit.icon,
+          fruitName: fruit.name,
           title: 'Heavy restock ${fruit.name}',
           detail:
               '${fruit.name} leads today with ${fruit.weightLabel} sold across ${fruit.transactions} sales.',
@@ -4403,7 +4404,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           badge: const StatusBadge.red('Heavy'),
         ),
         2 => _ForecastRecommendation(
-          icon: fruit.icon,
+          fruitName: fruit.name,
           title: 'Medium restock ${fruit.name}',
           detail:
               '${fruit.name} is the second strongest seller. Prepare a steady refill for demand.',
@@ -4412,7 +4413,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           badge: const StatusBadge.orange('Medium'),
         ),
         _ => _ForecastRecommendation(
-          icon: fruit.icon,
+          fruitName: fruit.name,
           title: 'Light top-up ${fruit.name}',
           detail:
               '${fruit.name} is moving, but a lighter refill should be enough for the next round.',
@@ -6837,13 +6838,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       color: sourceColor.withValues(alpha: 0.14),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: Icon(
-                      change.source == 'conflict'
-                          ? Icons.shield_rounded
-                          : Icons.history_rounded,
-                      color: sourceColor,
-                      size: 16,
-                    ),
+                    child: FruitMark(name: change.fruitName, size: 22),
                   ),
                   const SizedBox(width: 9),
                   Expanded(
@@ -7108,9 +7103,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             spacing: 8,
             runSpacing: 8,
             children: _managedFruits.map((String fruit) {
-              final FruitInfo info = _catalog[fruit]!;
               return FruitChip(
-                icon: info.icon,
                 label: fruit,
                 onRemove: _isGuestSession ? null : () => _removeFruit(fruit),
               );
@@ -7150,7 +7143,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
   Widget _inventoryRestockRow(FruitRank rank, int position) {
     final _RestockSignal signal = _restockSignalForRankIndex(position - 1);
-    final FruitInfo? info = _catalog[rank.name];
     final Color rankColor = switch (position) {
       1 => const Color(0xFFFFD54F),
       2 => const Color(0xFFB0BEC5),
@@ -7183,11 +7175,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             ),
           ),
           const SizedBox(width: 9),
-          Icon(
-            info?.icon ?? Icons.local_florist_rounded,
-            color: AppColors.greenText,
-            size: 19,
-          ),
+          FruitMark(name: rank.name, size: 24),
           const SizedBox(width: 9),
           Expanded(
             child: Column(
@@ -7921,7 +7909,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               else
                 ...recommendations.map((_ForecastRecommendation item) {
                   return GuidedActionRow(
-                    icon: item.icon,
+                    fruitName: item.fruitName,
                     title: item.title,
                     detail: item.detail,
                     badge: item.badge,
@@ -9505,7 +9493,7 @@ class _FruityVensCatalogIcons {
 
 class _ForecastRecommendation {
   const _ForecastRecommendation({
-    required this.icon,
+    required this.fruitName,
     required this.title,
     required this.detail,
     required this.value,
@@ -9513,7 +9501,7 @@ class _ForecastRecommendation {
     required this.badge,
   });
 
-  final IconData icon;
+  final String fruitName;
   final String title;
   final String detail;
   final String value;
@@ -11545,7 +11533,7 @@ class _TopFruitRankRow extends StatelessWidget {
                     border: Border.all(color: AppColors.borderSoft, width: 0.5),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Icon(fruit.icon, color: AppColors.greenText, size: 16),
+                  child: FruitMark(name: fruit.name, size: 20),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -11707,13 +11695,7 @@ class _InventoryFruitCard extends StatelessWidget {
                         : AppColors.palm.withValues(alpha: 0.14),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Icon(
-                    fruit.icon,
-                    color: expanded
-                        ? AppColors.orangeText
-                        : AppColors.greenText,
-                    size: 18,
-                  ),
+                  child: FruitMark(name: fruit.name, size: 24),
                 ),
                 const SizedBox(width: 9),
                 Expanded(
@@ -12014,13 +11996,13 @@ class SmartStepper extends StatelessWidget {
 class GuidedActionRow extends StatelessWidget {
   const GuidedActionRow({
     super.key,
-    required this.icon,
+    required this.fruitName,
     required this.title,
     required this.detail,
     required this.badge,
   });
 
-  final IconData icon;
+  final String fruitName;
   final String title;
   final String detail;
   final Widget badge;
@@ -12030,7 +12012,7 @@ class GuidedActionRow extends StatelessWidget {
     return BorderRow(
       child: Row(
         children: <Widget>[
-          Icon(icon, color: AppColors.greenText, size: 20),
+          FruitMark(name: fruitName, size: 24),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -12244,9 +12226,6 @@ class HistoryTransactionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bool cancelled = transaction.status == 'Cancelled';
-    final IconData fruitIcon =
-        _FruityVensHomeState._catalog[transaction.fruit]?.icon ??
-        Icons.local_florist_rounded;
     final VoidCallback? manageAction = onManage;
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -12267,10 +12246,10 @@ class HistoryTransactionCard extends StatelessWidget {
                   : AppColors.palm.withValues(alpha: 0.14),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: Icon(
-              fruitIcon,
-              color: cancelled ? AppColors.pinkText : AppColors.greenText,
-              size: 18,
+            child: FruitMark(
+              name: transaction.fruit,
+              size: 23,
+              muted: cancelled,
             ),
           ),
           const SizedBox(width: 10),
@@ -12382,14 +12361,8 @@ class SquareButton extends StatelessWidget {
 }
 
 class FruitChip extends StatelessWidget {
-  const FruitChip({
-    super.key,
-    required this.icon,
-    required this.label,
-    required this.onRemove,
-  });
+  const FruitChip({super.key, required this.label, required this.onRemove});
 
-  final IconData icon;
   final String label;
   final VoidCallback? onRemove;
 
@@ -12405,7 +12378,7 @@ class FruitChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          Icon(icon, color: AppColors.greenText, size: 15),
+          FruitMark(name: label, size: 18),
           const SizedBox(width: 6),
           Text(
             label,
