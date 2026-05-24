@@ -8,7 +8,7 @@ import 'dart:ui' as ui;
 import 'package:crypto/crypto.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter/foundation.dart' show kReleaseMode;
+import 'package:flutter/foundation.dart' show ValueNotifier, kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
@@ -116,24 +116,18 @@ class FruityVensApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'FruityVens',
-      debugShowCheckedModeBanner: false,
-      scaffoldMessengerKey: fruityVensMessengerKey,
-      theme: ThemeData(
-        useMaterial3: true,
-        scaffoldBackgroundColor: AppColors.bgBase,
-        colorScheme: const ColorScheme.dark(
-          primary: AppColors.palm,
-          secondary: AppColors.orange,
-          surface: AppColors.bgCard,
-        ),
-        textTheme: ThemeData.dark().textTheme.apply(
-          bodyColor: AppColors.textPrimary,
-          displayColor: AppColors.textPrimary,
-        ),
-      ),
-      home: FruityVensHome(database: database),
+    return ValueListenableBuilder<bool>(
+      valueListenable: AppColors.lightThemeEnabled,
+      builder: (BuildContext context, bool lightThemeEnabled, Widget? child) {
+        return MaterialApp(
+          title: 'FruityVens',
+          debugShowCheckedModeBanner: false,
+          scaffoldMessengerKey: fruityVensMessengerKey,
+          theme: AppColors.materialTheme(lightThemeEnabled),
+          home: child,
+        );
+      },
+      child: FruityVensHome(database: database),
     );
   }
 }
@@ -180,6 +174,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   static const String _phoneLinkEnabledKey = 'phone_link_enabled';
   static const String _phoneLinkPinKey = 'phone_link_pin_secret';
   static const String _fruitDetectionModelKey = 'fruit_detection_model_id';
+  static const String _themeModeKey = 'theme_mode';
   static const String _scaleDeviceIdKey = 'scale_device_id';
   static const String _fruitDetectionAutoMode = 'auto';
   static const String _inventoryPriceConfiguredPrefix =
@@ -589,6 +584,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         ? 'Firebase sync ready'
         : 'Offline mode';
     _syncFruitState();
+    unawaited(_loadThemePreference());
     _loadRememberedAccount();
     _loadDeviceId();
     _loadFruitDetectionModelPreference();
@@ -1642,6 +1638,29 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     });
   }
 
+  Future<void> _loadThemePreference() async {
+    final String? savedTheme = await _database.getSetting(_themeModeKey);
+    final bool useLightTheme = savedTheme == 'light';
+    if (AppColors.isLightTheme != useLightTheme) {
+      AppColors.setLightTheme(useLightTheme);
+      if (mounted) {
+        setState(() {});
+      }
+    }
+  }
+
+  Future<void> _setLightThemeEnabled(
+    bool enabled, {
+    StateSetter? dialogSetState,
+  }) async {
+    AppColors.setLightTheme(enabled);
+    dialogSetState?.call(() {});
+    if (mounted) {
+      setState(() {});
+    }
+    await _database.saveSetting(_themeModeKey, enabled ? 'light' : 'dark');
+  }
+
   Future<bool> _setFruitDetectionModel(String mode) async {
     final Map<String, Object?>? profile = mode == _fruitDetectionAutoMode
         ? await _readDeviceProfile()
@@ -2032,25 +2051,25 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       builder: (BuildContext dialogContext) {
         return AlertDialog(
           backgroundColor: AppColors.bgCard,
-          title: const Text('Check this price'),
+          title: Text('Check this price'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               Text(
                 '$fruit is being set to ${money(newPrice)}/kg.',
-                style: const TextStyle(
+                style: TextStyle(
                   color: AppColors.textPrimary,
                   fontSize: 14,
                   fontWeight: FontWeight.w800,
                 ),
               ),
-              const SizedBox(height: 8),
+              SizedBox(height: 8),
               Text(
                 oldPrice > 0
                     ? 'Previous price was ${money(oldPrice)}/kg. This is a large or unusual change, so FruityVens will save it in price history.'
                     : 'This looks outside the usual fruit price range. FruityVens will save it in price history.',
-                style: const TextStyle(
+                style: TextStyle(
                   color: AppColors.textSecondary,
                   fontSize: 13,
                   height: 1.4,
@@ -2061,7 +2080,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Cancel'),
+              child: Text('Cancel'),
             ),
             FilledButton(
               style: FilledButton.styleFrom(
@@ -2069,7 +2088,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 foregroundColor: Colors.white,
               ),
               onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Save price'),
+              child: Text('Save price'),
             ),
           ],
         );
@@ -2851,20 +2870,20 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
             return AlertDialog(
               backgroundColor: AppColors.bgCard,
-              title: const Text('Link this phone'),
+              title: Text('Link this phone'),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                   Text(
                     'Secure $email on this phone. Next time, FruityVens can unlock automatically with biometrics. If biometrics fails, use this PIN.',
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: AppColors.textSecondary,
                       fontSize: 13,
                       height: 1.4,
                     ),
                   ),
-                  const SizedBox(height: 14),
+                  SizedBox(height: 14),
                   TextField(
                     controller: pinController,
                     obscureText: true,
@@ -2874,7 +2893,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       FilteringTextInputFormatter.digitsOnly,
                       LengthLimitingTextInputFormatter(6),
                     ],
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: AppColors.textPrimary,
                       letterSpacing: 4,
                     ),
@@ -2884,7 +2903,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       prefixIcon: Icons.pin_rounded,
                     ).copyWith(counterText: ''),
                   ),
-                  const SizedBox(height: 10),
+                  SizedBox(height: 10),
                   TextField(
                     controller: confirmController,
                     obscureText: true,
@@ -2894,7 +2913,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       FilteringTextInputFormatter.digitsOnly,
                       LengthLimitingTextInputFormatter(6),
                     ],
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: AppColors.textPrimary,
                       letterSpacing: 4,
                     ),
@@ -2909,11 +2928,11 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     value: useBiometrics,
                     contentPadding: EdgeInsets.zero,
                     activeThumbColor: AppColors.palm,
-                    title: const Text(
+                    title: Text(
                       'Use biometrics automatically',
                       style: TextStyle(fontSize: 13),
                     ),
-                    subtitle: const Text(
+                    subtitle: Text(
                       'PIN stays as backup.',
                       style: TextStyle(
                         color: AppColors.textMuted,
@@ -2927,13 +2946,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     },
                   ),
                   if (errorText != null) ...<Widget>[
-                    const SizedBox(height: 6),
+                    SizedBox(height: 6),
                     Text(
                       errorText!,
-                      style: const TextStyle(
-                        color: AppColors.pinkText,
-                        fontSize: 12,
-                      ),
+                      style: TextStyle(color: AppColors.pinkText, fontSize: 12),
                     ),
                   ],
                 ],
@@ -2941,9 +2957,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               actions: <Widget>[
                 TextButton(
                   onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: const Text('Not now'),
+                  child: Text('Not now'),
                 ),
-                TextButton(onPressed: submit, child: const Text('Link phone')),
+                TextButton(onPressed: submit, child: Text('Link phone')),
               ],
             );
           },
@@ -3107,7 +3123,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  const Text(
+                  Text(
                     'Enter your 6-digit phone PIN to continue.',
                     style: TextStyle(
                       color: AppColors.textSecondary,
@@ -3115,7 +3131,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       height: 1.4,
                     ),
                   ),
-                  const SizedBox(height: 14),
+                  SizedBox(height: 14),
                   TextField(
                     controller: pinController,
                     autofocus: true,
@@ -3126,7 +3142,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       FilteringTextInputFormatter.digitsOnly,
                       LengthLimitingTextInputFormatter(6),
                     ],
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: AppColors.textPrimary,
                       letterSpacing: 4,
                     ),
@@ -3138,13 +3154,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     ).copyWith(counterText: ''),
                   ),
                   if (errorText != null) ...<Widget>[
-                    const SizedBox(height: 6),
+                    SizedBox(height: 6),
                     Text(
                       errorText!,
-                      style: const TextStyle(
-                        color: AppColors.pinkText,
-                        fontSize: 12,
-                      ),
+                      style: TextStyle(color: AppColors.pinkText, fontSize: 12),
                     ),
                   ],
                 ],
@@ -3152,13 +3165,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               actions: <Widget>[
                 TextButton(
                   onPressed: () => Navigator.of(dialogContext).pop('switch'),
-                  child: const Text('Switch account'),
+                  child: Text('Switch account'),
                 ),
                 TextButton(
                   onPressed: () => Navigator.of(dialogContext).pop('password'),
-                  child: const Text('Use password'),
+                  child: Text('Use password'),
                 ),
-                TextButton(onPressed: submitPin, child: const Text('Unlock')),
+                TextButton(onPressed: submitPin, child: Text('Unlock')),
               ],
             );
           },
@@ -3427,20 +3440,20 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           builder: (BuildContext context, StateSetter setDialogState) {
             return AlertDialog(
               backgroundColor: AppColors.bgCard,
-              title: const Text('Create offline password'),
+              title: Text('Create offline password'),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                   Text(
                     'This password lets $email sign in on this phone when there is no internet.',
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: AppColors.textSecondary,
                       fontSize: 12,
                       height: 1.35,
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  SizedBox(height: 12),
                   AppTextField(
                     controller: passwordController,
                     label: 'Password',
@@ -3465,7 +3478,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 10),
+                  SizedBox(height: 10),
                   AppTextField(
                     controller: confirmController,
                     label: 'Confirm password',
@@ -3474,13 +3487,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     prefixIcon: Icons.verified_user_outlined,
                   ),
                   if (errorText != null) ...<Widget>[
-                    const SizedBox(height: 8),
+                    SizedBox(height: 8),
                     Text(
                       errorText!,
-                      style: const TextStyle(
-                        color: AppColors.pinkText,
-                        fontSize: 12,
-                      ),
+                      style: TextStyle(color: AppColors.pinkText, fontSize: 12),
                     ),
                   ],
                 ],
@@ -3488,7 +3498,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               actions: <Widget>[
                 TextButton(
                   onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: const Text('Cancel'),
+                  child: Text('Cancel'),
                 ),
                 FilledButton(
                   onPressed: () {
@@ -3508,7 +3518,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     }
                     Navigator.of(dialogContext).pop(password);
                   },
-                  child: const Text('Save'),
+                  child: Text('Save'),
                 ),
               ],
             );
@@ -3747,10 +3757,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         SnackBar(
           content: Text(
             message,
-            style: const TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w600,
-            ),
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
           ),
           behavior: SnackBarBehavior.floating,
           backgroundColor: AppColors.bgRaised,
@@ -4360,27 +4367,27 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
   _RestockSignal _restockSignalForRankIndex(int index) {
     if (index == 0) {
-      return const _RestockSignal(
+      return _RestockSignal(
         label: 'Heavy restock',
         detail: 'Top seller today. Prepare the largest refill.',
         badge: StatusBadge.red('Heavy'),
       );
     }
     if (index == 1) {
-      return const _RestockSignal(
+      return _RestockSignal(
         label: 'Medium restock',
         detail: 'Strong movement. Add a steady refill.',
         badge: StatusBadge.orange('Medium'),
       );
     }
     if (index == 2) {
-      return const _RestockSignal(
+      return _RestockSignal(
         label: 'Light top-up',
         detail: 'Selling, but a lighter refill should be enough.',
         badge: StatusBadge.green('Light'),
       );
     }
-    return const _RestockSignal(
+    return _RestockSignal(
       label: 'No sales signal',
       detail: 'No restock signal yet. Sales will update this automatically.',
       badge: StatusBadge.blue('Watch'),
@@ -4401,7 +4408,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               '${fruit.name} leads today with ${fruit.weightLabel} sold across ${fruit.transactions} sales.',
           value: fruit.weightLabel,
           note: 'Avg ${fruit.averageWeightLabel}/sale',
-          badge: const StatusBadge.red('Heavy'),
+          badge: StatusBadge.red('Heavy'),
         ),
         2 => _ForecastRecommendation(
           fruitName: fruit.name,
@@ -4410,7 +4417,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               '${fruit.name} is the second strongest seller. Prepare a steady refill for demand.',
           value: fruit.weightLabel,
           note: 'Avg ${fruit.averageWeightLabel}/sale',
-          badge: const StatusBadge.orange('Medium'),
+          badge: StatusBadge.orange('Medium'),
         ),
         _ => _ForecastRecommendation(
           fruitName: fruit.name,
@@ -4419,7 +4426,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               '${fruit.name} is moving, but a lighter refill should be enough for the next round.',
           value: fruit.weightLabel,
           note: 'Avg ${fruit.averageWeightLabel}/sale',
-          badge: const StatusBadge.green('Light'),
+          badge: StatusBadge.green('Light'),
         ),
       };
     }).toList();
@@ -4556,7 +4563,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         Container(
           width: double.infinity,
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             color: AppColors.bgBase,
             border: Border(
               bottom: BorderSide(color: AppColors.borderSoft, width: 0.5),
@@ -4725,12 +4732,12 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 alignment: Alignment.centerRight,
                 child: TextButton(
                   onPressed: () => unawaited(_completeWalkthrough()),
-                  child: const Text('Skip'),
+                  child: Text('Skip'),
                 ),
               ),
-              const SizedBox(height: 8),
+              SizedBox(height: 8),
               const BrandMark(size: 62),
-              const SizedBox(height: 14),
+              SizedBox(height: 14),
               Text(
                 'FruityVens',
                 textAlign: TextAlign.center,
@@ -4738,8 +4745,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   fontWeight: FontWeight.w800,
                 ),
               ),
-              const SizedBox(height: 8),
-              const Text(
+              SizedBox(height: 8),
+              Text(
                 'A local-first fruit vending companion.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
@@ -4748,7 +4755,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   height: 1.45,
                 ),
               ),
-              const SizedBox(height: 24),
+              SizedBox(height: 24),
               AnimatedSwitcher(
                 duration: const Duration(milliseconds: 260),
                 switchInCurve: Curves.easeOutCubic,
@@ -4775,7 +4782,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                           size: 38,
                         ),
                       ),
-                      const SizedBox(height: 20),
+                      SizedBox(height: 20),
                       Text(
                         step.title,
                         textAlign: TextAlign.center,
@@ -4783,17 +4790,17 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                           fontWeight: FontWeight.w800,
                         ),
                       ),
-                      const SizedBox(height: 10),
+                      SizedBox(height: 10),
                       Text(
                         step.body,
                         textAlign: TextAlign.center,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: AppColors.textSecondary,
                           fontSize: 13,
                           height: 1.55,
                         ),
                       ),
-                      const SizedBox(height: 18),
+                      SizedBox(height: 18),
                       Wrap(
                         alignment: WrapAlignment.center,
                         spacing: 8,
@@ -4804,7 +4811,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   ),
                 ),
               ),
-              const SizedBox(height: 20),
+              SizedBox(height: 20),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: List<Widget>.generate(_walkthroughSteps.length, (
@@ -4823,7 +4830,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   );
                 }),
               ),
-              const SizedBox(height: 22),
+              SizedBox(height: 22),
               Row(
                 children: <Widget>[
                   if (page > 0)
@@ -4836,7 +4843,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     )
                   else
                     const Spacer(),
-                  const SizedBox(width: 12),
+                  SizedBox(width: 12),
                   Expanded(
                     flex: 2,
                     child: PrimaryButton(
@@ -4850,7 +4857,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
+              SizedBox(height: 12),
               GhostButton(
                 label: 'Try demo',
                 icon: Icons.play_circle_outline_rounded,
@@ -4875,7 +4882,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       ),
       child: Text(
         label,
-        style: const TextStyle(
+        style: TextStyle(
           color: AppColors.orangeText,
           fontSize: 11,
           fontWeight: FontWeight.w700,
@@ -4894,15 +4901,15 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
               const BrandMark(size: 58),
-              const SizedBox(height: 14),
+              SizedBox(height: 14),
               Text(
                 'FruityVens',
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              const SizedBox(height: 8),
-              const Text(
+              SizedBox(height: 8),
+              Text(
                 'Fruit weighing, pricing, forecasting, and analytics.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
@@ -4911,21 +4918,21 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   fontSize: 12,
                 ),
               ),
-              const SizedBox(height: 26),
+              SizedBox(height: 26),
               AppCard(
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
                 child: Column(
                   children: <Widget>[
                     Container(
                       height: 3,
-                      decoration: const BoxDecoration(
+                      decoration: BoxDecoration(
                         color: AppColors.orange,
                         borderRadius: BorderRadius.vertical(
                           top: Radius.circular(12),
                         ),
                       ),
                     ),
-                    const SizedBox(height: 18),
+                    SizedBox(height: 18),
                     AppTextField(
                       controller: _usernameController,
                       label: 'Vendor or student email',
@@ -4934,7 +4941,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       prefixIcon: Icons.alternate_email_rounded,
                       textInputAction: TextInputAction.next,
                     ),
-                    const SizedBox(height: 14),
+                    SizedBox(height: 14),
                     AppTextField(
                       controller: _passwordController,
                       label: 'Password',
@@ -4961,7 +4968,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 4),
+                    SizedBox(height: 4),
                     Row(
                       children: <Widget>[
                         Checkbox(
@@ -4973,10 +4980,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                           },
                           activeColor: AppColors.palm,
                           checkColor: AppColors.bgBase,
-                          side: const BorderSide(color: AppColors.borderMid),
+                          side: BorderSide(color: AppColors.borderMid),
                           visualDensity: VisualDensity.compact,
                         ),
-                        const Expanded(
+                        Expanded(
                           child: Text(
                             'Remember this device',
                             style: TextStyle(
@@ -4991,11 +4998,11 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                             foregroundColor: AppColors.orangeText,
                             padding: const EdgeInsets.symmetric(horizontal: 8),
                           ),
-                          child: const Text('Forgot password?'),
+                          child: Text('Forgot password?'),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 10),
+                    SizedBox(height: 10),
                     PrimaryButton(
                       label: _signingIn ? 'Signing in' : 'Sign in',
                       icon: Icons.login_rounded,
@@ -5003,7 +5010,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       expanded: true,
                       busy: _signingIn,
                     ),
-                    const SizedBox(height: 10),
+                    SizedBox(height: 10),
                     GoogleSignInButton(
                       label: _googleSigningIn
                           ? 'Connecting Google'
@@ -5011,9 +5018,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       onPressed: _authBusy ? null : _signInWithGoogle,
                       busy: _googleSigningIn,
                     ),
-                    const SizedBox(height: 12),
+                    SizedBox(height: 12),
                     Row(
-                      children: const <Widget>[
+                      children: <Widget>[
                         Expanded(child: Divider(color: AppColors.borderSoft)),
                         Padding(
                           padding: EdgeInsets.symmetric(horizontal: 10),
@@ -5029,27 +5036,27 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                         Expanded(child: Divider(color: AppColors.borderSoft)),
                       ],
                     ),
-                    const SizedBox(height: 12),
+                    SizedBox(height: 12),
                     GhostButton(
                       label: 'Guest Mode',
                       icon: Icons.person_outline_rounded,
                       onPressed: _authBusy ? null : _continueAsGuest,
                     ),
                     if (_rememberedAccountEmail != null) ...<Widget>[
-                      const SizedBox(height: 8),
+                      SizedBox(height: 8),
                       Text(
                         'Remembered account: $_rememberedAccountEmail',
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: AppColors.textMuted,
                           fontSize: 11,
                         ),
                       ),
                     ],
-                    const SizedBox(height: 14),
+                    SizedBox(height: 14),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: <Widget>[
-                        const Flexible(
+                        Flexible(
                           child: Text(
                             "Don't have an account?",
                             style: TextStyle(
@@ -5064,15 +5071,15 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                             foregroundColor: AppColors.orangeText,
                             padding: const EdgeInsets.symmetric(horizontal: 8),
                           ),
-                          child: const Text('Create account'),
+                          child: Text('Create account'),
                         ),
                       ],
                     ),
                   ],
                 ),
               ),
-              const SizedBox(height: 14),
-              const Text(
+              SizedBox(height: 14),
+              Text(
                 'Phinma Education Cagayan De Oro',
                 style: TextStyle(color: AppColors.textMuted, fontSize: 12),
               ),
@@ -5093,7 +5100,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
               const BrandMark(size: 54),
-              const SizedBox(height: 12),
+              SizedBox(height: 12),
               Text(
                 'Reset Password',
                 textAlign: TextAlign.center,
@@ -5101,8 +5108,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   context,
                 ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
               ),
-              const SizedBox(height: 8),
-              const Text(
+              SizedBox(height: 8),
+              Text(
                 'Enter the email connected to your FruityVens account.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
@@ -5111,7 +5118,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   fontSize: 12,
                 ),
               ),
-              const SizedBox(height: 20),
+              SizedBox(height: 20),
               AppCard(
                 padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
                 child: Column(
@@ -5119,16 +5126,16 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   children: <Widget>[
                     Container(
                       height: 3,
-                      decoration: const BoxDecoration(
+                      decoration: BoxDecoration(
                         color: AppColors.orange,
                         borderRadius: BorderRadius.vertical(
                           top: Radius.circular(12),
                         ),
                       ),
                     ),
-                    const SizedBox(height: 16),
+                    SizedBox(height: 16),
                     const SectionLabel('Account recovery'),
-                    const SizedBox(height: 10),
+                    SizedBox(height: 10),
                     AppTextField(
                       controller: _resetEmailController,
                       label: 'Account email',
@@ -5138,7 +5145,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       textInputAction: TextInputAction.done,
                       onSubmitted: (_) => _sendPasswordReset(),
                     ),
-                    const SizedBox(height: 12),
+                    SizedBox(height: 12),
                     PrimaryButton(
                       label: _sendingReset
                           ? 'Sending'
@@ -5149,7 +5156,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       busy: _sendingReset,
                     ),
                     if (_resetSent) ...<Widget>[
-                      const SizedBox(height: 12),
+                      SizedBox(height: 12),
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.all(12),
@@ -5163,7 +5170,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                         ),
                         child: Text(
                           'Reset instructions are ready for ${_resetEmailController.text.trim().toLowerCase()}.',
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: AppColors.greenText,
                             fontSize: 12,
                             height: 1.35,
@@ -5174,14 +5181,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   ],
                 ),
               ),
-              const SizedBox(height: 12),
+              SizedBox(height: 12),
               TextButton.icon(
                 onPressed: () => _show(AppScreen.login),
                 style: TextButton.styleFrom(
                   foregroundColor: AppColors.orangeText,
                 ),
-                icon: const Icon(Icons.arrow_back_rounded, size: 18),
-                label: const Text('Back to sign in'),
+                icon: Icon(Icons.arrow_back_rounded, size: 18),
+                label: Text('Back to sign in'),
               ),
             ],
           ),
@@ -5200,7 +5207,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
               const BrandMark(size: 54),
-              const SizedBox(height: 12),
+              SizedBox(height: 12),
               Text(
                 'Create FruityVens Account',
                 textAlign: TextAlign.center,
@@ -5208,8 +5215,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   context,
                 ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
               ),
-              const SizedBox(height: 8),
-              const Text(
+              SizedBox(height: 8),
+              Text(
                 'Register with your PHINMAEd Gmail or any valid email address.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
@@ -5218,7 +5225,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   fontSize: 12,
                 ),
               ),
-              const SizedBox(height: 20),
+              SizedBox(height: 20),
               AppCard(
                 padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
                 child: Column(
@@ -5226,23 +5233,23 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   children: <Widget>[
                     Container(
                       height: 3,
-                      decoration: const BoxDecoration(
+                      decoration: BoxDecoration(
                         color: AppColors.orange,
                         borderRadius: BorderRadius.vertical(
                           top: Radius.circular(12),
                         ),
                       ),
                     ),
-                    const SizedBox(height: 16),
+                    SizedBox(height: 16),
                     _createAccountPanel(),
                   ],
                 ),
               ),
-              const SizedBox(height: 12),
+              SizedBox(height: 12),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: <Widget>[
-                  const Text(
+                  Text(
                     'Already have an account?',
                     style: TextStyle(
                       color: AppColors.textSecondary,
@@ -5254,7 +5261,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     style: TextButton.styleFrom(
                       foregroundColor: AppColors.orangeText,
                     ),
-                    child: const Text('Sign in'),
+                    child: Text('Sign in'),
                   ),
                 ],
               ),
@@ -5278,7 +5285,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           const SectionLabel('Create account'),
-          const SizedBox(height: 10),
+          SizedBox(height: 10),
           GoogleSignInButton(
             label: _googleSigningIn
                 ? 'Opening Google'
@@ -5286,9 +5293,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             onPressed: _authBusy ? null : _signInWithGoogle,
             busy: _googleSigningIn,
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
           Row(
-            children: const <Widget>[
+            children: <Widget>[
               Expanded(child: Divider(color: AppColors.borderSoft)),
               Padding(
                 padding: EdgeInsets.symmetric(horizontal: 10),
@@ -5304,7 +5311,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               Expanded(child: Divider(color: AppColors.borderSoft)),
             ],
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
           AppTextField(
             controller: _signupNameController,
             label: 'Full name',
@@ -5312,7 +5319,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             prefixIcon: Icons.person_outline_rounded,
             textInputAction: TextInputAction.next,
           ),
-          const SizedBox(height: 10),
+          SizedBox(height: 10),
           AppTextField(
             controller: _signupEmailController,
             label: 'Email address',
@@ -5321,7 +5328,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             prefixIcon: Icons.alternate_email_rounded,
             textInputAction: TextInputAction.next,
           ),
-          const SizedBox(height: 10),
+          SizedBox(height: 10),
           AppTextField(
             controller: _signupPasswordController,
             label: 'Password',
@@ -5347,7 +5354,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               ),
             ),
           ),
-          const SizedBox(height: 10),
+          SizedBox(height: 10),
           AppTextField(
             controller: _signupConfirmController,
             label: 'Confirm password',
@@ -5357,7 +5364,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             textInputAction: TextInputAction.done,
             onSubmitted: (_) => _createAccount(),
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
           PrimaryButton(
             label: _creatingAccount ? 'Creating account' : 'Create account',
             icon: Icons.person_add_alt_rounded,
@@ -5365,8 +5372,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             expanded: true,
             busy: _creatingAccount,
           ),
-          const SizedBox(height: 8),
-          const Text(
+          SizedBox(height: 8),
+          Text(
             'PHINMAEd Gmail and personal email accounts work offline first and sync with Firebase when available.',
             style: TextStyle(
               color: AppColors.textMuted,
@@ -5384,10 +5391,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         _dashboardSalesOverview(),
-        const SizedBox(height: 12),
+        SizedBox(height: 12),
         if (_isGuestSession) ...<Widget>[
           _guestAccessBanner(),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
         ],
         _recentTransactionsPreview(),
       ],
@@ -5409,29 +5416,26 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 spacing: 8,
                 runSpacing: 6,
                 children: <Widget>[
-                  const Text(
+                  Text(
                     'Dashboard',
                     style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
                   ),
                   StatusBadge.green(_cloudSyncStatus ?? 'Offline mode'),
                 ],
               ),
-              const SizedBox(height: 12),
+              SizedBox(height: 12),
               Text(
                 money(stats.salesTotal),
-                style: const TextStyle(
+                style: TextStyle(
                   color: AppColors.orangeText,
                   fontSize: 28,
                   fontWeight: FontWeight.w900,
                 ),
               ),
-              const SizedBox(height: 3),
+              SizedBox(height: 3),
               Text(
                 stats.salesSubtext,
-                style: const TextStyle(
-                  color: AppColors.textSecondary,
-                  fontSize: 12,
-                ),
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
               ),
             ],
           );
@@ -5441,11 +5445,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           if (!wide) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                salesBlock,
-                const SizedBox(height: 14),
-                topRanking,
-              ],
+              children: <Widget>[salesBlock, SizedBox(height: 14), topRanking],
             );
           }
 
@@ -5453,7 +5453,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             crossAxisAlignment: CrossAxisAlignment.center,
             children: <Widget>[
               Expanded(child: salesBlock),
-              const SizedBox(width: 12),
+              SizedBox(width: 12),
               SizedBox(width: 300, child: topRanking),
             ],
           );
@@ -5474,14 +5474,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               color: AppColors.orange.withValues(alpha: 0.14),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: const Icon(
+            child: Icon(
               Icons.lock_outline_rounded,
               color: AppColors.orangeText,
               size: 20,
             ),
           ),
-          const SizedBox(width: 10),
-          const Expanded(
+          SizedBox(width: 10),
+          Expanded(
             child: Text(
               'Guest Mode uses sample sales for previews. Create an account for reports and sync.',
               style: TextStyle(
@@ -5491,7 +5491,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               ),
             ),
           ),
-          const SizedBox(width: 8),
+          SizedBox(width: 8),
           GhostButton(
             label: 'Create',
             icon: Icons.person_add_alt_rounded,
@@ -5506,7 +5506,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   Widget _operationsMenuPanel() {
     return Container(
       height: double.infinity,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: AppColors.bgCard,
         border: Border(
           right: BorderSide(color: AppColors.borderStrong, width: 0.5),
@@ -5519,7 +5519,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           children: <Widget>[
             Row(
               children: <Widget>[
-                const Expanded(child: SectionLabel('Menu')),
+                Expanded(child: SectionLabel('Menu')),
                 IconButton(
                   tooltip: 'Close operations menu',
                   onPressed: () {
@@ -5527,14 +5527,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       _operationsOpen = false;
                     });
                   },
-                  icon: const Icon(
+                  icon: Icon(
                     Icons.close_rounded,
                     color: AppColors.textSecondary,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 4),
+            SizedBox(height: 4),
             _operationMenuAction(
               icon: Icons.inventory_2_rounded,
               title: 'Inventory',
@@ -5581,7 +5581,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               locked: _isGuestSession,
               onTap: _downloadData,
             ),
-            const Divider(color: AppColors.borderSoft, height: 18),
+            Divider(color: AppColors.borderSoft, height: 18),
             _operationMenuAction(
               icon: Icons.logout_rounded,
               title: 'Logout',
@@ -5650,7 +5650,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                               : AppColors.textSecondary,
                           size: 20,
                         ),
-                        const SizedBox(width: 8),
+                        SizedBox(width: 8),
                         Icon(
                           _fruitDetectionModelIcon(model.id),
                           color: selected
@@ -5658,7 +5658,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                               : AppColors.textSecondary,
                           size: 20,
                         ),
-                        const SizedBox(width: 10),
+                        SizedBox(width: 10),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -5668,22 +5668,22 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                   Expanded(
                                     child: Text(
                                       model.title,
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                         fontSize: 13,
                                         fontWeight: FontWeight.w800,
                                       ),
                                     ),
                                   ),
                                   if (model.recommended)
-                                    const StatusBadge.green('BEST')
+                                    StatusBadge.green('BEST')
                                   else
                                     StatusBadge.blue(model.precision),
                                 ],
                               ),
-                              const SizedBox(height: 3),
+                              SizedBox(height: 3),
                               Text(
                                 model.description,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   color: AppColors.textMuted,
                                   fontSize: 11,
                                   height: 1.25,
@@ -5739,7 +5739,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                               : AppColors.textSecondary,
                           size: 20,
                         ),
-                        const SizedBox(width: 8),
+                        SizedBox(width: 8),
                         Icon(
                           Icons.phone_android_rounded,
                           color: selected
@@ -5747,14 +5747,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                               : AppColors.textSecondary,
                           size: 20,
                         ),
-                        const SizedBox(width: 10),
+                        SizedBox(width: 10),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: <Widget>[
                               Row(
                                 children: <Widget>[
-                                  const Expanded(
+                                  Expanded(
                                     child: Text(
                                       'Auto phone check',
                                       style: TextStyle(
@@ -5766,10 +5766,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                   StatusBadge.green(_fruitDetectionModel.title),
                                 ],
                               ),
-                              const SizedBox(height: 3),
+                              SizedBox(height: 3),
                               Text(
                                 '${_deviceProfileSummary()} - Low uses INT8, mid uses Float16, high uses Best.',
-                                style: const TextStyle(
+                                style: TextStyle(
                                   color: AppColors.textMuted,
                                   fontSize: 11,
                                   height: 1.25,
@@ -5787,7 +5787,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
             return AlertDialog(
               backgroundColor: AppColors.bgCard,
-              title: const Text('Account Settings'),
+              title: Text('Account Settings'),
               content: SizedBox(
                 width: 420,
                 child: SingleChildScrollView(
@@ -5804,32 +5804,32 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                               color: AppColors.palm.withValues(alpha: 0.14),
                               borderRadius: BorderRadius.circular(8),
                             ),
-                            child: const Icon(
+                            child: Icon(
                               Icons.fingerprint_rounded,
                               color: AppColors.greenText,
                               size: 20,
                             ),
                           ),
-                          const SizedBox(width: 10),
+                          SizedBox(width: 10),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: <Widget>[
-                                const Text(
+                                Text(
                                   'Linked phone unlock',
                                   style: TextStyle(
                                     fontSize: 14,
                                     fontWeight: FontWeight.w800,
                                   ),
                                 ),
-                                const SizedBox(height: 3),
+                                SizedBox(height: 3),
                                 Text(
                                   _phoneLinkEnabled
                                       ? (_biometricAutoLoginEnabled
                                             ? 'Biometrics enabled, 6-digit PIN backup'
                                             : '6-digit PIN enabled for this phone')
                                       : 'Set up biometrics and a 6-digit PIN',
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     color: AppColors.textSecondary,
                                     fontSize: 12,
                                     height: 1.35,
@@ -5859,7 +5859,64 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                           ),
                         ],
                       ),
-                      const Divider(color: AppColors.borderSoft, height: 28),
+                      Divider(color: AppColors.borderSoft, height: 28),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Container(
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: AppColors.orange.withValues(alpha: 0.14),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Icon(
+                              AppColors.isLightTheme
+                                  ? Icons.light_mode_rounded
+                                  : Icons.dark_mode_rounded,
+                              color: AppColors.orangeText,
+                              size: 20,
+                            ),
+                          ),
+                          SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                Text(
+                                  'Light theme',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                SizedBox(height: 3),
+                                Text(
+                                  AppColors.isLightTheme
+                                      ? 'Soft forest-floor colors for daytime selling.'
+                                      : 'Dark mode keeps the current night-market look.',
+                                  style: TextStyle(
+                                    color: AppColors.textSecondary,
+                                    fontSize: 12,
+                                    height: 1.35,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Switch(
+                            value: AppColors.isLightTheme,
+                            onChanged: (bool enabled) => unawaited(
+                              _setLightThemeEnabled(
+                                enabled,
+                                dialogSetState: setDialogState,
+                              ),
+                            ),
+                            activeThumbColor: AppColors.palm,
+                          ),
+                        ],
+                      ),
+                      Divider(color: AppColors.borderSoft, height: 28),
                       Row(
                         children: <Widget>[
                           Container(
@@ -5875,22 +5932,22 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                               size: 20,
                             ),
                           ),
-                          const SizedBox(width: 10),
+                          SizedBox(width: 10),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: <Widget>[
-                                const Text(
+                                Text(
                                   'Fruit AI model',
                                   style: TextStyle(
                                     fontSize: 14,
                                     fontWeight: FontWeight.w800,
                                   ),
                                 ),
-                                const SizedBox(height: 3),
+                                SizedBox(height: 3),
                                 Text(
                                   '$_fruitDetectionModeLabel - ${_fruitDetectionModel.fileName}',
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     color: AppColors.textSecondary,
                                     fontSize: 12,
                                     height: 1.35,
@@ -5901,12 +5958,12 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 6),
+                      SizedBox(height: 6),
                       autoModelTile(),
                       for (final FruitDetectionModel model
                           in FruitDetectionService.builtInModels)
                         modelTile(model),
-                      const Divider(color: AppColors.borderSoft, height: 28),
+                      Divider(color: AppColors.borderSoft, height: 28),
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: <Widget>[
@@ -5917,20 +5974,20 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                               color: AppColors.palm.withValues(alpha: 0.14),
                               borderRadius: BorderRadius.circular(8),
                             ),
-                            child: const Icon(
+                            child: Icon(
                               Icons.scale_rounded,
                               color: AppColors.greenText,
                               size: 20,
                             ),
                           ),
-                          const SizedBox(width: 10),
+                          SizedBox(width: 10),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: <Widget>[
                                 Row(
                                   children: <Widget>[
-                                    const Expanded(
+                                    Expanded(
                                       child: Text(
                                         'Firebase scale sync',
                                         style: TextStyle(
@@ -5942,25 +5999,25 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                     if (_scaleLogSyncRunning)
                                       StatusBadge.blue('CHECKING')
                                     else if (_scaleBaseUrl.isEmpty)
-                                      const StatusBadge.orange('OFF')
+                                      StatusBadge.orange('OFF')
                                     else
-                                      const StatusBadge.green('ON'),
+                                      StatusBadge.green('ON'),
                                   ],
                                 ),
-                                const SizedBox(height: 3),
+                                SizedBox(height: 3),
                                 Text(
                                   _scaleLogStatus,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     color: AppColors.textSecondary,
                                     fontSize: 12,
                                     height: 1.35,
                                   ),
                                 ),
                                 if (_lastScaleLogSyncAt != null) ...<Widget>[
-                                  const SizedBox(height: 2),
+                                  SizedBox(height: 2),
                                   Text(
                                     'Last checked ${_formatTime(_lastScaleLogSyncAt!)}',
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       color: AppColors.textMuted,
                                       fontSize: 11,
                                     ),
@@ -5971,7 +6028,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 10),
+                      SizedBox(height: 10),
                       AppTextField(
                         controller: _scaleBaseUrlController,
                         label: 'Scale device ID',
@@ -5983,7 +6040,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                           _saveScaleBaseUrl(dialogSetState: setDialogState),
                         ),
                       ),
-                      const SizedBox(height: 10),
+                      SizedBox(height: 10),
                       Row(
                         children: <Widget>[
                           Expanded(
@@ -5997,7 +6054,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                               ),
                             ),
                           ),
-                          const SizedBox(width: 8),
+                          SizedBox(width: 8),
                           Expanded(
                             child: GhostButton(
                               label: 'Fetch Firebase',
@@ -6025,7 +6082,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               actions: <Widget>[
                 TextButton(
                   onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: const Text('Close'),
+                  child: Text('Close'),
                 ),
               ],
             );
@@ -6041,9 +6098,11 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     required String description,
     required VoidCallback onTap,
     bool locked = false,
-    Color color = AppColors.greenText,
+    Color? color,
   }) {
-    final Color effectiveColor = locked ? AppColors.textMuted : color;
+    final Color effectiveColor = locked
+        ? AppColors.textMuted
+        : color ?? AppColors.greenText;
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -6066,7 +6125,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   size: 18,
                 ),
               ),
-              const SizedBox(width: 10),
+              SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -6076,19 +6135,19 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                         Expanded(
                           child: Text(
                             title,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w800,
                             ),
                           ),
                         ),
-                        if (locked) const StatusBadge.orange('LOCKED'),
+                        if (locked) StatusBadge.orange('LOCKED'),
                       ],
                     ),
-                    const SizedBox(height: 2),
+                    SizedBox(height: 2),
                     Text(
                       description,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: AppColors.textMuted,
                         fontSize: 11,
                       ),
@@ -6109,7 +6168,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       children: <Widget>[
         Row(
           children: <Widget>[
-            const Expanded(
+            Expanded(
               child: Text(
                 'Recent sales',
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
@@ -6123,7 +6182,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             ),
           ],
         ),
-        const SizedBox(height: 10),
+        SizedBox(height: 10),
         if (_visibleTransactionHistory.isEmpty)
           _emptyStateCard(
             icon: Icons.receipt_long_rounded,
@@ -6158,22 +6217,19 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             ),
             child: Icon(icon, color: AppColors.greenText, size: 20),
           ),
-          const SizedBox(width: 10),
+          SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Text(
                   title,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                  ),
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
                 ),
-                const SizedBox(height: 3),
+                SizedBox(height: 3),
                 Text(
                   detail,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppColors.textSecondary,
                     fontSize: 12,
                     height: 1.35,
@@ -6202,7 +6258,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     action = await showModalBottomSheet<_TransactionHistoryAction>(
       context: context,
       backgroundColor: AppColors.bgCard,
-      shape: const RoundedRectangleBorder(
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
       ),
       builder: (BuildContext sheetContext) {
@@ -6215,11 +6271,11 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               children: <Widget>[
                 Row(
                   children: <Widget>[
-                    const Expanded(child: SectionTitle('Manage sale')),
+                    Expanded(child: SectionTitle('Manage sale')),
                     IconButton(
                       tooltip: 'Close',
                       onPressed: () => Navigator.of(sheetContext).pop(),
-                      icon: const Icon(
+                      icon: Icon(
                         Icons.close_rounded,
                         color: AppColors.textSecondary,
                       ),
@@ -6228,12 +6284,12 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 ),
                 Text(
                   '${transaction.fruit} - ${transaction.weight} - ${transaction.price}',
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppColors.textSecondary,
                     fontSize: 12,
                   ),
                 ),
-                const SizedBox(height: 10),
+                SizedBox(height: 10),
                 ListTile(
                   leading: Icon(
                     cancelled ? Icons.restore_rounded : Icons.cancel_outlined,
@@ -6254,12 +6310,12 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   ),
                 ),
                 ListTile(
-                  leading: const Icon(
+                  leading: Icon(
                     Icons.delete_outline_rounded,
                     color: AppColors.pinkText,
                   ),
-                  title: const Text('Remove from history'),
-                  subtitle: const Text(
+                  title: Text('Remove from history'),
+                  subtitle: Text(
                     'Hide this sale from history, reports, analytics, and forecasts.',
                   ),
                   onTap: () => Navigator.of(
@@ -6267,12 +6323,12 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   ).pop(_TransactionHistoryAction.remove),
                 ),
                 ListTile(
-                  leading: const Icon(
+                  leading: Icon(
                     Icons.check_circle_outline_rounded,
                     color: AppColors.textSecondary,
                   ),
                   title: Text(cancelled ? 'Keep as void' : 'Keep sale'),
-                  subtitle: const Text('Leave this transaction unchanged.'),
+                  subtitle: Text('Leave this transaction unchanged.'),
                   onTap: () => Navigator.of(
                     sheetContext,
                   ).pop(_TransactionHistoryAction.keep),
@@ -6323,10 +6379,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       builder: (BuildContext dialogContext) {
         return AlertDialog(
           backgroundColor: AppColors.bgCard,
-          title: const Text('Remove sale?'),
+          title: Text('Remove sale?'),
           content: Text(
             'This hides ${transaction.fruit} from history, analytics, forecasts, and reports. A removed sync record is kept so cloud sync will not add it back.',
-            style: const TextStyle(
+            style: TextStyle(
               color: AppColors.textSecondary,
               fontSize: 13,
               height: 1.4,
@@ -6335,7 +6391,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Keep'),
+              child: Text('Keep'),
             ),
             FilledButton(
               style: FilledButton.styleFrom(
@@ -6343,7 +6399,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 foregroundColor: Colors.white,
               ),
               onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Remove'),
+              child: Text('Remove'),
             ),
           ],
         );
@@ -6474,28 +6530,28 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       color: AppColors.orange.withValues(alpha: 0.14),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: const Icon(
+                    child: Icon(
                       Icons.receipt_long_rounded,
                       color: AppColors.orangeText,
                       size: 21,
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
                         Text(
                           dateLabel,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w800,
                           ),
                         ),
-                        const SizedBox(height: 2),
+                        SizedBox(height: 2),
                         Text(
                           _formatDate(selectedDate),
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: AppColors.textSecondary,
                             fontSize: 12,
                           ),
@@ -6505,7 +6561,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   ),
                 ],
               ),
-              const SizedBox(height: 10),
+              SizedBox(height: 10),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: <Widget>[
@@ -6520,21 +6576,21 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       ],
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  SizedBox(width: 10),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: <Widget>[
-                      const Text(
+                      Text(
                         'Sales',
                         style: TextStyle(
                           color: AppColors.textSecondary,
                           fontSize: 11,
                         ),
                       ),
-                      const SizedBox(height: 3),
+                      SizedBox(height: 3),
                       Text(
                         money(salesTotal),
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: AppColors.orangeText,
                           fontSize: 16,
                           fontWeight: FontWeight.w800,
@@ -6547,7 +6603,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             ],
           ),
         ),
-        const SizedBox(height: 12),
+        SizedBox(height: 12),
         Column(
           children: transactions.isEmpty
               ? <Widget>[
@@ -6585,13 +6641,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           stats: stats,
           configuredPriceCount: configuredPriceCount,
         ),
-        const SizedBox(height: 10),
+        SizedBox(height: 10),
         if (_isGuestSession) ...<Widget>[
           _demoInventoryNotice(),
-          const SizedBox(height: 10),
+          SizedBox(height: 10),
         ],
         if (_inventoryLoading) ...<Widget>[
-          const AppCard(
+          AppCard(
             child: Row(
               children: <Widget>[
                 SizedBox(
@@ -6610,25 +6666,25 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               ],
             ),
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
         ],
         _inventoryRestockPanel(stats),
-        const SizedBox(height: 12),
+        SizedBox(height: 12),
         if (_priceConflictNotice != null && !_isGuestSession) ...<Widget>[
           _priceConflictBanner(),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
         ],
         if (_priceChangeHistory.isNotEmpty && !_isGuestSession) ...<Widget>[
           _priceHistoryPanel(),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
         ],
         Row(
           children: <Widget>[
-            const Expanded(child: SectionLabel('Prices and restock signals')),
+            Expanded(child: SectionLabel('Prices and restock signals')),
             StatusBadge.blue('${_managedFruits.length} active'),
           ],
         ),
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         if (_managedFruits.isEmpty)
           _emptyStateCard(
             icon: Icons.inventory_2_rounded,
@@ -6677,7 +6733,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       children: <Widget>[
         if (_isGuestSession) ...<Widget>[
           _demoInventoryNotice(),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
         ],
         AppCard(
           padding: const EdgeInsets.all(14),
@@ -6690,14 +6746,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   color: AppColors.orange.withValues(alpha: 0.14),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.tune_rounded,
                   color: AppColors.orangeText,
                   size: 20,
                 ),
               ),
-              const SizedBox(width: 10),
-              const Expanded(
+              SizedBox(width: 10),
+              Expanded(
                 child: Text(
                   'Choose the fruits this vendor sells, including Philippine tropical options, then set the price per kg.',
                   style: TextStyle(
@@ -6710,7 +6766,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             ],
           ),
         ),
-        const SizedBox(height: 12),
+        SizedBox(height: 12),
         _inventoryCatalogManager(availableFruits),
       ],
     );
@@ -6728,14 +6784,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               color: AppColors.orange.withValues(alpha: 0.14),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: const Icon(
+            child: Icon(
               Icons.visibility_rounded,
               color: AppColors.orangeText,
               size: 18,
             ),
           ),
-          const SizedBox(width: 10),
-          const Expanded(
+          SizedBox(width: 10),
+          Expanded(
             child: Text(
               'Demo pricing is preview-only. Create an account to edit prices and sync real inventory.',
               style: TextStyle(
@@ -6762,17 +6818,17 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               color: AppColors.orange.withValues(alpha: 0.14),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: const Icon(
+            child: Icon(
               Icons.security_rounded,
               color: AppColors.orangeText,
               size: 18,
             ),
           ),
-          const SizedBox(width: 10),
+          SizedBox(width: 10),
           Expanded(
             child: Text(
               _priceConflictNotice!,
-              style: const TextStyle(
+              style: TextStyle(
                 color: AppColors.textSecondary,
                 fontSize: 12,
                 height: 1.35,
@@ -6787,7 +6843,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 _priceConflictNotice = null;
               });
             },
-            icon: const Icon(
+            icon: Icon(
               Icons.close_rounded,
               color: AppColors.textMuted,
               size: 18,
@@ -6806,11 +6862,11 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         children: <Widget>[
           Row(
             children: <Widget>[
-              const Expanded(child: SectionTitle('Price history')),
+              Expanded(child: SectionTitle('Price history')),
               StatusBadge.blue('${_priceChangeHistory.length} recent'),
             ],
           ),
-          const SizedBox(height: 8),
+          SizedBox(height: 8),
           ..._priceChangeHistory.take(3).map((LocalPriceChange change) {
             final String sourceLabel = switch (change.source) {
               'cloud' => 'Cloud sync',
@@ -6824,7 +6880,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             };
             return Container(
               padding: const EdgeInsets.symmetric(vertical: 8),
-              decoration: const BoxDecoration(
+              decoration: BoxDecoration(
                 border: Border(
                   bottom: BorderSide(color: AppColors.borderSoft, width: 0.5),
                 ),
@@ -6840,24 +6896,24 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     ),
                     child: FruitMark(name: change.fruitName, size: 22),
                   ),
-                  const SizedBox(width: 9),
+                  SizedBox(width: 9),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
                         Text(
                           change.fruitName,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w800,
                           ),
                         ),
-                        const SizedBox(height: 2),
+                        SizedBox(height: 2),
                         Text(
                           '${money(change.oldPrice)} -> ${money(change.newPrice)}/kg',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: AppColors.textSecondary,
                             fontSize: 11,
                           ),
@@ -6865,7 +6921,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       ],
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  SizedBox(width: 8),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: <Widget>[
@@ -6877,10 +6933,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                           fontWeight: FontWeight.w800,
                         ),
                       ),
-                      const SizedBox(height: 2),
+                      SizedBox(height: 2),
                       Text(
                         _shortDateTime(change.createdAt),
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: AppColors.textMuted,
                           fontSize: 10,
                         ),
@@ -6917,30 +6973,30 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   color: AppColors.palm.withValues(alpha: 0.14),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.inventory_2_rounded,
                   color: AppColors.greenText,
                   size: 22,
                 ),
               ),
-              const SizedBox(width: 12),
+              SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    const Text(
+                    Text(
                       'Catalog pricing',
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
-                    const SizedBox(height: 4),
+                    SizedBox(height: 4),
                     Text(
                       leader == null
                           ? 'No restock leader yet'
                           : '${leader.name} leads today',
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: AppColors.textSecondary,
                         fontSize: 12,
                       ),
@@ -6949,11 +7005,11 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 ),
               ),
               leader == null
-                  ? const StatusBadge.orange('Waiting')
-                  : const StatusBadge.red('Heavy'),
+                  ? StatusBadge.orange('Waiting')
+                  : StatusBadge.red('Heavy'),
             ],
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
           LayoutBuilder(
             builder: (BuildContext context, BoxConstraints constraints) {
               final bool wide = constraints.maxWidth >= 620;
@@ -7009,13 +7065,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         child: Row(
           children: <Widget>[
             Icon(icon, color: AppColors.orangeText, size: 18),
-            const SizedBox(width: 8),
+            SizedBox(width: 8),
             Expanded(
               child: Text(
                 label,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: TextStyle(
                   color: AppColors.textSecondary,
                   fontSize: 11,
                   fontWeight: FontWeight.w700,
@@ -7024,7 +7080,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             ),
             Text(
               value,
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900),
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900),
             ),
           ],
         ),
@@ -7040,7 +7096,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         children: <Widget>[
           Row(
             children: <Widget>[
-              const Expanded(child: SectionTitle('Catalog manager')),
+              Expanded(child: SectionTitle('Catalog manager')),
               StatusBadge.blue('${availableFruits.length} available'),
             ],
           ),
@@ -7096,9 +7152,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               );
             },
           ),
-          const SizedBox(height: 14),
+          SizedBox(height: 14),
           const SectionLabel('Active catalog'),
-          const SizedBox(height: 8),
+          SizedBox(height: 8),
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -7122,9 +7178,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         children: <Widget>[
           Row(
             children: <Widget>[
-              const Expanded(child: SectionTitle('Today\'s restock priority')),
+              Expanded(child: SectionTitle('Today\'s restock priority')),
               stats.topFruitRanks.isEmpty
-                  ? const StatusBadge.orange('No signal')
+                  ? StatusBadge.orange('No signal')
                   : StatusBadge.green('${stats.topFruitRanks.length} ranked'),
             ],
           ),
@@ -7150,7 +7206,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     };
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 10),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         border: Border(
           bottom: BorderSide(color: AppColors.borderSoft, width: 0.5),
         ),
@@ -7174,9 +7230,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               ),
             ),
           ),
-          const SizedBox(width: 9),
+          SizedBox(width: 9),
           FruitMark(name: rank.name, size: 24),
-          const SizedBox(width: 9),
+          SizedBox(width: 9),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -7185,17 +7241,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   rank.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w900,
-                  ),
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900),
                 ),
-                const SizedBox(height: 2),
+                SizedBox(height: 2),
                 Text(
                   '${rank.transactions} sales - ${_formatKgValue(rank.weightKg)} - ${money(rank.revenuePhp)}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppColors.textSecondary,
                     fontSize: 11,
                   ),
@@ -7203,7 +7256,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               ],
             ),
           ),
-          const SizedBox(width: 8),
+          SizedBox(width: 8),
           signal.badge,
         ],
       ),
@@ -7212,18 +7265,18 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
   StatusBadge _cameraEyeBadge() {
     if (_cameraEyeBusy) {
-      return const StatusBadge.orange('Working');
+      return StatusBadge.orange('Working');
     }
     if (_cameraEyeStatus.ready) {
-      return const StatusBadge.green('Eye ready');
+      return StatusBadge.green('Eye ready');
     }
     if (_cameraEyeStatus.connectedToAp) {
-      return const StatusBadge.orange('AP linked');
+      return StatusBadge.orange('AP linked');
     }
     if (_cameraEyeStatus.supported) {
-      return const StatusBadge.blue('Standby');
+      return StatusBadge.blue('Standby');
     }
-    return const StatusBadge.red('Android only');
+    return StatusBadge.red('Android only');
   }
 
   bool get _cameraEyeIsIdle =>
@@ -7420,12 +7473,12 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                               8,
                                             ),
                                           ),
-                                          child: const Icon(
+                                          child: Icon(
                                             Icons.videocam_rounded,
                                             color: AppColors.greenText,
                                           ),
                                         ),
-                                        const SizedBox(width: 10),
+                                        SizedBox(width: 10),
                                         Expanded(
                                           child: Column(
                                             crossAxisAlignment:
@@ -7437,7 +7490,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                                 crossAxisAlignment:
                                                     WrapCrossAlignment.center,
                                                 children: <Widget>[
-                                                  const Text(
+                                                  Text(
                                                     'Camera Eye',
                                                     style: TextStyle(
                                                       fontSize: 16,
@@ -7448,10 +7501,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                                   _cameraEyeBadge(),
                                                 ],
                                               ),
-                                              const SizedBox(height: 3),
+                                              SizedBox(height: 3),
                                               Text(
                                                 _cameraEyeStatus.message,
-                                                style: const TextStyle(
+                                                style: TextStyle(
                                                   color:
                                                       AppColors.textSecondary,
                                                   fontSize: 12,
@@ -7465,14 +7518,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                           tooltip: 'Close',
                                           onPressed: () =>
                                               Navigator.of(dialogContext).pop(),
-                                          icon: const Icon(
+                                          icon: Icon(
                                             Icons.close_rounded,
                                             color: AppColors.textSecondary,
                                           ),
                                         ),
                                       ],
                                     ),
-                                    const SizedBox(height: 14),
+                                    SizedBox(height: 14),
                                     Wrap(
                                       spacing: 8,
                                       runSpacing: 8,
@@ -7490,7 +7543,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                         ),
                                       ],
                                     ),
-                                    const SizedBox(height: 12),
+                                    SizedBox(height: 12),
                                     Container(
                                       width: double.infinity,
                                       padding: const EdgeInsets.all(12),
@@ -7507,23 +7560,23 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                             CrossAxisAlignment.start,
                                         children: <Widget>[
                                           const SectionLabel('Camera route'),
-                                          const SizedBox(height: 8),
+                                          SizedBox(height: 8),
                                           _cameraInfoRow(
                                             'Host',
                                             CameraEyeService.baseUrl,
                                           ),
-                                          const SizedBox(height: 6),
+                                          SizedBox(height: 6),
                                           _cameraInfoRow(
                                             'Snapshot',
                                             _cameraEyeStatus.snapshotUrl,
                                           ),
-                                          const SizedBox(height: 6),
+                                          SizedBox(height: 6),
                                           _cameraInfoRow(
                                             'Probe',
                                             _cameraEyeStatus.probeUrl ??
                                                 'Not reachable yet',
                                           ),
-                                          const SizedBox(height: 6),
+                                          SizedBox(height: 6),
                                           _cameraInfoRow(
                                             'Model',
                                             _fruitDetectionModelMode ==
@@ -7535,7 +7588,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                         ],
                                       ),
                                     ),
-                                    const SizedBox(height: 12),
+                                    SizedBox(height: 12),
                                     Container(
                                       width: double.infinity,
                                       padding: const EdgeInsets.all(12),
@@ -7562,7 +7615,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                                 }
                                               },
                                             )
-                                          : const Text(
+                                          : Text(
                                               'Preview pulls camera snapshots from the ESP32-CAM while preview or scale detection is active. When detection finishes, the camera returns to idle.',
                                               style: TextStyle(
                                                 color: AppColors.textSecondary,
@@ -7572,7 +7625,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                             ),
                                     ),
                                     if (panelNotice != null) ...<Widget>[
-                                      const SizedBox(height: 12),
+                                      SizedBox(height: 12),
                                       Container(
                                         width: double.infinity,
                                         padding: const EdgeInsets.all(12),
@@ -7611,11 +7664,11 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                                   : AppColors.greenText,
                                               size: 18,
                                             ),
-                                            const SizedBox(width: 8),
+                                            SizedBox(width: 8),
                                             Expanded(
                                               child: Text(
                                                 panelNotice!,
-                                                style: const TextStyle(
+                                                style: TextStyle(
                                                   color:
                                                       AppColors.textSecondary,
                                                   fontSize: 12,
@@ -7628,14 +7681,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                       ),
                                     ],
                                     if (_cameraEyeBusy) ...<Widget>[
-                                      const SizedBox(height: 12),
-                                      const LinearProgressIndicator(
+                                      SizedBox(height: 12),
+                                      LinearProgressIndicator(
                                         minHeight: 2,
                                         color: AppColors.orangeText,
                                         backgroundColor: AppColors.bgSurface,
                                       ),
                                     ],
-                                    const SizedBox(height: 14),
+                                    SizedBox(height: 14),
                                     Wrap(
                                       spacing: 8,
                                       runSpacing: 8,
@@ -7743,7 +7796,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           width: 58,
           child: Text(
             label,
-            style: const TextStyle(
+            style: TextStyle(
               color: AppColors.textMuted,
               fontSize: 11,
               fontWeight: FontWeight.w700,
@@ -7753,7 +7806,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         Expanded(
           child: Text(
             value,
-            style: const TextStyle(
+            style: TextStyle(
               color: AppColors.textSecondary,
               fontSize: 11,
               height: 1.25,
@@ -7786,16 +7839,16 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     ),
                   ),
                   _isGuestSession
-                      ? const StatusBadge.blue('Demo')
+                      ? StatusBadge.blue('Demo')
                       : _latestAiError == null
-                      ? const StatusBadge.green('Ready')
-                      : const StatusBadge.orange('Check AI'),
+                      ? StatusBadge.green('Ready')
+                      : StatusBadge.orange('Check AI'),
                 ],
               ),
               if (_forecastGenerating)
                 Row(
                   children: <Widget>[
-                    const SizedBox(
+                    SizedBox(
                       width: 18,
                       height: 18,
                       child: CircularProgressIndicator(
@@ -7803,13 +7856,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                         color: AppColors.orangeText,
                       ),
                     ),
-                    const SizedBox(width: 10),
+                    SizedBox(width: 10),
                     Expanded(
                       child: Text(
                         _isGuestSession
                             ? 'Building a local demo forecast from sample sales...'
                             : 'Updating forecast...',
-                        style: const TextStyle(color: AppColors.textSecondary),
+                        style: TextStyle(color: AppColors.textSecondary),
                       ),
                     ),
                   ],
@@ -7830,19 +7883,16 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   ),
                 ),
               if (_latestAiForecast != null) ...<Widget>[
-                const SizedBox(height: 8),
+                SizedBox(height: 8),
                 Text(
                   'Source: ${_latestAiForecast!.sourceLabel}',
-                  style: const TextStyle(
-                    color: AppColors.textMuted,
-                    fontSize: 11,
-                  ),
+                  style: TextStyle(color: AppColors.textMuted, fontSize: 11),
                 ),
               ],
             ],
           ),
         ),
-        const SizedBox(height: 12),
+        SizedBox(height: 12),
         AppCard(
           padding: const EdgeInsets.all(14),
           child: Column(
@@ -7855,19 +7905,19 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                           ? 'Demo projection from sample sales only.'
                           : 'Projection from sales activity.')
                     : 'No sales yet.',
-                style: const TextStyle(
+                style: TextStyle(
                   color: AppColors.textSecondary,
                   fontSize: 12,
                   height: 1.35,
                 ),
               ),
-              const SizedBox(height: 10),
+              SizedBox(height: 10),
               if (forecastChart.hasSales) ...<Widget>[
                 ChartLegend(
                   labels: forecastChart.fruitLabels,
                   colors: AppColors.chartColors,
                 ),
-                const SizedBox(height: 10),
+                SizedBox(height: 10),
                 StackedBarChart(
                   labels: forecastChart.labels,
                   series: forecastChart.series,
@@ -7877,7 +7927,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 ),
               ] else
                 const _ForecastChartEmptyState(),
-              const SizedBox(height: 12),
+              SizedBox(height: 12),
               MetricGrid(
                 maxColumns: 3,
                 metrics: <MetricData>[
@@ -7897,7 +7947,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             ],
           ),
         ),
-        const SizedBox(height: 12),
+        SizedBox(height: 12),
         AppCard(
           padding: const EdgeInsets.all(14),
           child: Column(
@@ -8328,7 +8378,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         _analyticsFilterPill(data),
-        const SizedBox(height: 14),
+        SizedBox(height: 14),
         MetricGrid(
           maxColumns: 2,
           minColumns: 2,
@@ -8353,7 +8403,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             ),
           ],
         ),
-        const SizedBox(height: 12),
+        SizedBox(height: 12),
         AppCard(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -8361,18 +8411,15 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               SectionTitle(data.chartTitle),
               Text(
                 data.chartSub,
-                style: const TextStyle(
-                  color: AppColors.textSecondary,
-                  fontSize: 12,
-                ),
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
               ),
-              const SizedBox(height: 12),
+              SizedBox(height: 12),
               if (data.hasSales) ...<Widget>[
                 ChartLegend(
                   labels: data.shareLabels,
                   colors: AppColors.chartColors,
                 ),
-                const SizedBox(height: 10),
+                SizedBox(height: 10),
                 StackedBarChart(
                   labels: data.revenueLabels,
                   series: data.revenueSeries,
@@ -8386,10 +8433,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             ],
           ),
         ),
-        const SizedBox(height: 12),
+        SizedBox(height: 12),
         _analyticsInsightToggle(data),
         if (_showAnalyticsDetails) ...<Widget>[
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
           AppCard(
             padding: const EdgeInsets.all(14),
             child: LayoutBuilder(
@@ -8414,7 +8461,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: <Widget>[
                           const SectionTitle('Revenue share by fruit'),
-                          const SizedBox(height: 8),
+                          SizedBox(height: 8),
                           if (data.hasSales)
                             ..._shareRows(data.shareLabels, data.shareValues)
                           else
@@ -8429,7 +8476,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               },
             ),
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: 12),
           AppCard(
             padding: const EdgeInsets.all(14),
             child: Column(
@@ -8466,12 +8513,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         padding: const EdgeInsets.all(14),
         child: Row(
           children: <Widget>[
-            const Icon(
-              Icons.insights_rounded,
-              color: AppColors.greenText,
-              size: 20,
-            ),
-            const SizedBox(width: 10),
+            Icon(Icons.insights_rounded, color: AppColors.greenText, size: 20),
+            SizedBox(width: 10),
             Expanded(
               child: Text(
                 data.hasSales
@@ -8481,19 +8524,19 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     : (_showAnalyticsDetails
                           ? 'No revenue leader yet. Tap to hide details.'
                           : 'No revenue leader yet. Tap to view details.'),
-                style: const TextStyle(
+                style: TextStyle(
                   color: AppColors.textSecondary,
                   fontSize: 12,
                   height: 1.35,
                 ),
               ),
             ),
-            const SizedBox(width: 8),
+            SizedBox(width: 8),
             AnimatedRotation(
               turns: _showAnalyticsDetails ? 0.5 : 0,
               duration: const Duration(milliseconds: 180),
               curve: Curves.easeOutCubic,
-              child: const Icon(
+              child: Icon(
                 Icons.keyboard_arrow_down_rounded,
                 color: AppColors.textSecondary,
                 size: 24,
@@ -8522,26 +8565,26 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              const Icon(
+              Icon(
                 Icons.calendar_month_rounded,
                 color: AppColors.orangeText,
                 size: 16,
               ),
-              const SizedBox(width: 7),
+              SizedBox(width: 7),
               Flexible(
                 child: Text(
                   data.contextText,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppColors.orangeText,
                     fontSize: 12,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
               ),
-              const SizedBox(width: 5),
-              const Icon(
+              SizedBox(width: 5),
+              Icon(
                 Icons.keyboard_arrow_down_rounded,
                 color: AppColors.orangeText,
                 size: 18,
@@ -8609,19 +8652,19 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                         children: <Widget>[
                           Row(
                             children: <Widget>[
-                              const Expanded(child: SectionTitle('Date range')),
+                              Expanded(child: SectionTitle('Date range')),
                               IconButton(
                                 tooltip: 'Close',
                                 onPressed: () =>
                                     Navigator.of(sheetContext).pop(),
-                                icon: const Icon(
+                                icon: Icon(
                                   Icons.close_rounded,
                                   color: AppColors.textSecondary,
                                 ),
                               ),
                             ],
                           ),
-                          const SizedBox(height: 8),
+                          SizedBox(height: 8),
                           _analyticsFilterOption(
                             icon: Icons.calendar_view_week_rounded,
                             title: 'Last 7 days',
@@ -8659,10 +8702,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                             selected: sheetPeriod == AnalyticsPeriod.allTime,
                             onTap: () => apply(period: AnalyticsPeriod.allTime),
                           ),
-                          const SizedBox(height: 12),
+                          SizedBox(height: 12),
                           Row(
                             children: <Widget>[
-                              const Expanded(child: SectionLabel('Year')),
+                              Expanded(child: SectionLabel('Year')),
                               _compactIconButton(
                                 tooltip: 'Previous year',
                                 icon: Icons.chevron_left_rounded,
@@ -8678,7 +8721,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                 ),
                                 child: Text(
                                   '$sheetYear',
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.w900,
                                   ),
@@ -8693,12 +8736,12 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                               ),
                             ],
                           ),
-                          const SizedBox(height: 8),
+                          SizedBox(height: 8),
                           Row(
                             children: <Widget>[
-                              const Expanded(child: SectionLabel('Month')),
+                              Expanded(child: SectionLabel('Month')),
                               if (!monthEnabled)
-                                const Text(
+                                Text(
                                   'Used for month view',
                                   style: TextStyle(
                                     color: AppColors.textMuted,
@@ -8707,7 +8750,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                 ),
                             ],
                           ),
-                          const SizedBox(height: 8),
+                          SizedBox(height: 8),
                           Opacity(
                             opacity: monthEnabled ? 1 : 0.42,
                             child: AbsorbPointer(
@@ -8804,7 +8847,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 color: selected ? AppColors.orangeText : AppColors.textMuted,
                 size: 19,
               ),
-              const SizedBox(width: 10),
+              SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -8819,10 +8862,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                         fontWeight: FontWeight.w900,
                       ),
                     ),
-                    const SizedBox(height: 2),
+                    SizedBox(height: 2),
                     Text(
                       detail,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: AppColors.textMuted,
                         fontSize: 11,
                       ),
@@ -8831,7 +8874,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 ),
               ),
               if (selected)
-                const Icon(
+                Icon(
                   Icons.check_circle_rounded,
                   color: AppColors.orangeText,
                   size: 18,
@@ -8868,7 +8911,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         ),
         child: Text(
           label.substring(0, 3),
-          style: const TextStyle(fontWeight: FontWeight.w800),
+          style: TextStyle(fontWeight: FontWeight.w800),
         ),
       ),
     );
@@ -8909,14 +8952,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             ),
           ),
         ),
-        const SizedBox(width: 10),
+        SizedBox(width: 10),
         Expanded(
           child: Wrap(
             crossAxisAlignment: WrapCrossAlignment.center,
             spacing: 8,
             runSpacing: 4,
             children: <Widget>[
-              const Text(
+              Text(
                 'FruityVens',
                 style: TextStyle(
                   fontSize: 22,
@@ -8924,13 +8967,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   letterSpacing: 0,
                 ),
               ),
-              if (_isGuestSession) const StatusBadge.orange('Guest'),
+              if (_isGuestSession) StatusBadge.orange('Guest'),
             ],
           ),
         ),
-        const SizedBox(width: 10),
+        SizedBox(width: 10),
         _cameraEyeTopBarButton(),
-        const SizedBox(width: 8),
+        SizedBox(width: 8),
         _topBarIconButton(
           tooltip: _forecastGenerating
               ? 'Generating forecast'
@@ -9005,7 +9048,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 22,
                 fontWeight: FontWeight.w900,
                 letterSpacing: 0,
@@ -9045,7 +9088,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           onPressed: () => unawaited(_pickHistoryDate()),
         ),
         if (!selectedToday) ...<Widget>[
-          const SizedBox(width: 8),
+          SizedBox(width: 8),
           _topBarIconButton(
             tooltip: 'Show today',
             icon: Icons.today_rounded,
@@ -9067,7 +9110,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   List<Widget> _shareRows(List<String> labels, List<int> values) {
     final int total = values.fold<int>(0, (int sum, int item) => sum + item);
     if (total <= 0) {
-      return const <Widget>[];
+      return <Widget>[];
     }
     return List<Widget>.generate(labels.length, (int index) {
       final int percent = ((values[index] / total) * 100).round();
@@ -9083,13 +9126,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
-            const SizedBox(width: 8),
+            SizedBox(width: 8),
             Expanded(
-              child: Text(labels[index], style: const TextStyle(fontSize: 13)),
+              child: Text(labels[index], style: TextStyle(fontSize: 13)),
             ),
             Text(
               '${money(values[index])} - $percent%',
-              style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
+              style: TextStyle(color: AppColors.textMuted, fontSize: 12),
             ),
           ],
         ),
@@ -9101,11 +9144,11 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     if (movements.isEmpty) {
       return <List<Widget>>[
         <Widget>[
-          const Text('No sales yet'),
-          const Text('0 kg'),
-          const Text('PHP 0'),
-          const Text('Unset'),
-          const Align(
+          Text('No sales yet'),
+          Text('0 kg'),
+          Text('PHP 0'),
+          Text('Unset'),
+          Align(
             alignment: Alignment.centerLeft,
             child: StatusBadge.orange('Waiting'),
           ),
@@ -9119,7 +9162,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         Text(_formatKgValue(movement.weightKg)),
         Text(
           money(movement.revenuePhp),
-          style: const TextStyle(color: AppColors.orangeText),
+          style: TextStyle(color: AppColors.orangeText),
         ),
         Text(
           movement.weightKg <= 0
@@ -9129,9 +9172,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         Align(
           alignment: Alignment.centerLeft,
           child: switch (index) {
-            0 => const StatusBadge.green('Top'),
-            1 => const StatusBadge.blue('Steady'),
-            _ => const StatusBadge.orange('Watch'),
+            0 => StatusBadge.green('Top'),
+            1 => StatusBadge.blue('Steady'),
+            _ => StatusBadge.orange('Watch'),
           },
         ),
       ];
@@ -9140,27 +9183,96 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 }
 
 class AppColors {
-  static const Color bgBase = Color(0xFF0D1F0F);
-  static const Color bgSurface = Color(0xFF132916);
-  static const Color bgCard = Color(0xFF1A3320);
-  static const Color bgRaised = Color(0xFF1F3D26);
-  static const Color palm = Color(0xFF43A047);
-  static const Color palmDark = Color(0xFF1B5E20);
-  static const Color orange = Color(0xFFFB8C00);
-  static const Color orangeDim = Color(0xFF3D2200);
-  static const Color orangeText = Color(0xFFFFB74D);
-  static const Color pink = Color(0xFFEC407A);
-  static const Color pinkText = Color(0xFFF48FB1);
-  static const Color sand = Color(0xFFFFF3E0);
-  static const Color textPrimary = Color(0xFFFFF3E0);
-  static const Color textSecondary = Color(0xFFA5C9A8);
-  static const Color textMuted = Color(0xFF5A8A5D);
-  static const Color greenText = Color(0xFF81C784);
-  static const Color borderSoft = Color(0x2E43A047);
-  static const Color borderMid = Color(0x5243A047);
-  static const Color borderStrong = Color(0x73FB8C00);
+  static final ValueNotifier<bool> lightThemeEnabled = ValueNotifier<bool>(
+    false,
+  );
 
-  static const List<Color> chartColors = <Color>[
+  static bool get isLightTheme => lightThemeEnabled.value;
+
+  static void setLightTheme(bool enabled) {
+    if (lightThemeEnabled.value != enabled) {
+      lightThemeEnabled.value = enabled;
+    }
+  }
+
+  static ThemeData materialTheme(bool lightThemeEnabled) {
+    final Brightness brightness = lightThemeEnabled
+        ? Brightness.light
+        : Brightness.dark;
+    final TextTheme baseTextTheme = lightThemeEnabled
+        ? ThemeData.light().textTheme
+        : ThemeData.dark().textTheme;
+    return ThemeData(
+      useMaterial3: true,
+      brightness: brightness,
+      scaffoldBackgroundColor: bgBase,
+      colorScheme: ColorScheme(
+        brightness: brightness,
+        primary: palm,
+        onPrimary: bgBase,
+        secondary: orange,
+        onSecondary: bgBase,
+        error: pink,
+        onError: bgBase,
+        surface: bgCard,
+        onSurface: textPrimary,
+      ),
+      textTheme: baseTextTheme.apply(
+        bodyColor: textPrimary,
+        displayColor: textPrimary,
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: bgCard,
+        titleTextStyle: TextStyle(
+          color: textPrimary,
+          fontSize: 20,
+          fontWeight: FontWeight.w700,
+        ),
+        contentTextStyle: TextStyle(color: textPrimary),
+      ),
+    );
+  }
+
+  static Color get bgBase =>
+      isLightTheme ? const Color(0xFFF0F4EF) : const Color(0xFF0D1F0F);
+  static Color get bgSurface =>
+      isLightTheme ? const Color(0xFFE4EDE4) : const Color(0xFF132916);
+  static Color get bgCard =>
+      isLightTheme ? const Color(0xFFFFFFFF) : const Color(0xFF1A3320);
+  static Color get bgRaised =>
+      isLightTheme ? const Color(0xFFD5E3D5) : const Color(0xFF1F3D26);
+  static Color get palm =>
+      isLightTheme ? const Color(0xFF2E7D32) : const Color(0xFF43A047);
+  static Color get palmDark =>
+      isLightTheme ? const Color(0xFF43A047) : const Color(0xFF1B5E20);
+  static Color get orange =>
+      isLightTheme ? const Color(0xFFE65100) : const Color(0xFFFB8C00);
+  static Color get orangeDim =>
+      isLightTheme ? const Color(0xFFFFF3E0) : const Color(0xFF3D2200);
+  static Color get orangeText =>
+      isLightTheme ? const Color(0xFFBF360C) : const Color(0xFFFFB74D);
+  static Color get pink =>
+      isLightTheme ? const Color(0xFFC2185B) : const Color(0xFFEC407A);
+  static Color get pinkText =>
+      isLightTheme ? const Color(0xFFC2185B) : const Color(0xFFF48FB1);
+  static Color get sand =>
+      isLightTheme ? const Color(0xFFE65100) : const Color(0xFFFFF3E0);
+  static Color get textPrimary =>
+      isLightTheme ? const Color(0xFF1A2E1B) : const Color(0xFFFFF3E0);
+  static Color get textSecondary =>
+      isLightTheme ? const Color(0xFF4A6741) : const Color(0xFFA5C9A8);
+  static Color get textMuted =>
+      isLightTheme ? const Color(0xFF7A9B7C) : const Color(0xFF5A8A5D);
+  static Color get greenText =>
+      isLightTheme ? const Color(0xFF2E7D32) : const Color(0xFF81C784);
+  static Color get borderSoft =>
+      isLightTheme ? const Color(0x3343A047) : const Color(0x2E43A047);
+  static Color get borderMid =>
+      isLightTheme ? const Color(0x6643A047) : const Color(0x5243A047);
+  static Color get borderStrong =>
+      isLightTheme ? const Color(0x99E65100) : const Color(0x73FB8C00);
+
+  static List<Color> get chartColors => <Color>[
     palm,
     orange,
     pink,
@@ -9168,7 +9280,7 @@ class AppColors {
     palmDark,
   ];
 
-  static const List<Color> shareColors = <Color>[
+  static List<Color> get shareColors => <Color>[
     palm,
     sand,
     orange,
@@ -9277,7 +9389,7 @@ class _CameraEyeSnapshotPreviewState extends State<_CameraEyeSnapshotPreview> {
               color: Colors.black,
               alignment: Alignment.center,
               child: bytes == null
-                  ? const CircularProgressIndicator(
+                  ? CircularProgressIndicator(
                       color: AppColors.orangeText,
                       strokeWidth: 2,
                     )
@@ -9291,10 +9403,10 @@ class _CameraEyeSnapshotPreviewState extends State<_CameraEyeSnapshotPreview> {
             ),
           ),
         ),
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         Text(
           _message,
-          style: const TextStyle(
+          style: TextStyle(
             color: AppColors.textSecondary,
             fontSize: 12,
             height: 1.35,
@@ -9815,7 +9927,7 @@ double _tileWidth(double maxWidth, int count, double gap) {
 }
 
 class AppCard extends StatelessWidget {
-  const AppCard({super.key, required this.child, this.padding});
+  AppCard({super.key, required this.child, this.padding});
 
   final Widget child;
   final EdgeInsetsGeometry? padding;
@@ -9932,7 +10044,7 @@ class _PhoneLinkSetupScreenState extends State<_PhoneLinkSetupScreen> {
                               style: TextButton.styleFrom(
                                 foregroundColor: AppColors.textSecondary,
                               ),
-                              child: const Text('Not now'),
+                              child: Text('Not now'),
                             ),
                           ],
                         ),
@@ -9951,11 +10063,11 @@ class _PhoneLinkSetupScreenState extends State<_PhoneLinkSetupScreen> {
                             letterSpacing: 0,
                           ),
                         ),
-                        const SizedBox(height: 8),
+                        SizedBox(height: 8),
                         Text(
                           widget.email,
                           textAlign: TextAlign.center,
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: AppColors.textSecondary,
                             fontSize: 13,
                             height: 1.35,
@@ -9963,7 +10075,7 @@ class _PhoneLinkSetupScreenState extends State<_PhoneLinkSetupScreen> {
                         ),
                         SizedBox(height: compact ? 26 : 44),
                         _PinDots(filledCount: _entry.length),
-                        const SizedBox(height: 14),
+                        SizedBox(height: 14),
                         SizedBox(
                           height: 42,
                           child: Center(
@@ -10128,11 +10240,11 @@ class _PhoneLinkUnlockScreenState extends State<_PhoneLinkUnlockScreen> {
                             letterSpacing: 0,
                           ),
                         ),
-                        const SizedBox(height: 8),
+                        SizedBox(height: 8),
                         Text(
                           widget.email,
                           textAlign: TextAlign.center,
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: AppColors.textSecondary,
                             fontSize: 13,
                             height: 1.35,
@@ -10140,7 +10252,7 @@ class _PhoneLinkUnlockScreenState extends State<_PhoneLinkUnlockScreen> {
                         ),
                         SizedBox(height: compact ? 34 : 56),
                         _PinDots(filledCount: _entry.length),
-                        const SizedBox(height: 14),
+                        SizedBox(height: 14),
                         SizedBox(
                           height: 42,
                           child: Center(
@@ -10171,7 +10283,7 @@ class _PhoneLinkUnlockScreenState extends State<_PhoneLinkUnlockScreen> {
                                       : Icons.fingerprint_rounded,
                                   onPressed: _tryBiometrics,
                                   child: _biometricBusy
-                                      ? const SizedBox(
+                                      ? SizedBox(
                                           width: 22,
                                           height: 22,
                                           child: CircularProgressIndicator(
@@ -10195,9 +10307,9 @@ class _PhoneLinkUnlockScreenState extends State<_PhoneLinkUnlockScreen> {
                               style: TextButton.styleFrom(
                                 foregroundColor: AppColors.orangeText,
                               ),
-                              child: const Text('Use password'),
+                              child: Text('Use password'),
                             ),
-                            const Text(
+                            Text(
                               'or',
                               style: TextStyle(
                                 color: AppColors.textMuted,
@@ -10210,7 +10322,7 @@ class _PhoneLinkUnlockScreenState extends State<_PhoneLinkUnlockScreen> {
                               style: TextButton.styleFrom(
                                 foregroundColor: AppColors.textSecondary,
                               ),
-                              child: const Text('Switch account'),
+                              child: Text('Switch account'),
                             ),
                           ],
                         ),
@@ -10251,14 +10363,14 @@ class _BiometricFirstToggle extends StatelessWidget {
               color: AppColors.palm.withValues(alpha: 0.14),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: const Icon(
+            child: Icon(
               Icons.fingerprint_rounded,
               color: AppColors.greenText,
               size: 21,
             ),
           ),
-          const SizedBox(width: 10),
-          const Expanded(
+          SizedBox(width: 10),
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
@@ -10310,8 +10422,8 @@ class _PhoneUnlockGate extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
                 const BrandMark(size: 64),
-                const SizedBox(height: 22),
-                const Text(
+                SizedBox(height: 22),
+                Text(
                   'Authentication required',
                   textAlign: TextAlign.center,
                   style: TextStyle(
@@ -10321,19 +10433,19 @@ class _PhoneUnlockGate extends StatelessWidget {
                     letterSpacing: 0,
                   ),
                 ),
-                const SizedBox(height: 8),
+                SizedBox(height: 8),
                 Text(
                   email == null || email!.isEmpty
                       ? 'Unlock this linked phone to continue.'
                       : 'Unlock ${email!} on this phone.',
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppColors.textSecondary,
                     fontSize: 13,
                     height: 1.35,
                   ),
                 ),
-                const SizedBox(height: 26),
+                SizedBox(height: 26),
                 SizedBox(
                   width: 124,
                   child: LinearProgressIndicator(
@@ -10345,13 +10457,13 @@ class _PhoneUnlockGate extends StatelessWidget {
                         : AppColors.orangeText,
                   ),
                 ),
-                const SizedBox(height: 14),
+                SizedBox(height: 14),
                 Text(
                   biometricsEnabled
                       ? 'Biometrics will open first. PIN is ready as backup.'
                       : 'Your 6-digit phone PIN is ready.',
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppColors.textMuted,
                     fontSize: 12,
                     height: 1.35,
@@ -10413,11 +10525,11 @@ class _PhonePinPad extends StatelessWidget {
     return Column(
       children: <Widget>[
         _row(<Widget>[_digit('1'), _digit('2'), _digit('3')]),
-        const SizedBox(height: 16),
+        SizedBox(height: 16),
         _row(<Widget>[_digit('4'), _digit('5'), _digit('6')]),
-        const SizedBox(height: 16),
+        SizedBox(height: 16),
         _row(<Widget>[_digit('7'), _digit('8'), _digit('9')]),
-        const SizedBox(height: 16),
+        SizedBox(height: 16),
         _row(<Widget>[
           leading ?? SizedBox(width: buttonSize, height: buttonSize),
           _digit('0'),
@@ -10473,7 +10585,7 @@ class _PinPadTextButton extends StatelessWidget {
           child: Center(
             child: Text(
               label,
-              style: const TextStyle(
+              style: TextStyle(
                 color: AppColors.textPrimary,
                 fontSize: 30,
                 fontWeight: FontWeight.w600,
@@ -10560,7 +10672,7 @@ class _FloatingGlassSplashState extends State<FloatingGlassSplash>
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
@@ -10614,8 +10726,8 @@ class _FloatingGlassSplashState extends State<FloatingGlassSplash>
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
                             const BrandMark(size: 68),
-                            const SizedBox(height: 18),
-                            const Text(
+                            SizedBox(height: 18),
+                            Text(
                               'FruityVens',
                               style: TextStyle(
                                 fontSize: 26,
@@ -10624,7 +10736,7 @@ class _FloatingGlassSplashState extends State<FloatingGlassSplash>
                                 color: AppColors.textPrimary,
                               ),
                             ),
-                            const SizedBox(height: 7),
+                            SizedBox(height: 7),
                             Text(
                               'Smart fruit sales',
                               style: TextStyle(
@@ -10636,7 +10748,7 @@ class _FloatingGlassSplashState extends State<FloatingGlassSplash>
                                 letterSpacing: 0,
                               ),
                             ),
-                            const SizedBox(height: 18),
+                            SizedBox(height: 18),
                             SizedBox(
                               width: 96,
                               child: LinearProgressIndicator(
@@ -10749,12 +10861,12 @@ class PageHeader extends StatelessWidget {
         children: <Widget>[
           Text(
             title,
-            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
           ),
-          const SizedBox(height: 6),
+          SizedBox(height: 6),
           Text(
             subtitle,
-            style: const TextStyle(
+            style: TextStyle(
               color: AppColors.textSecondary,
               fontSize: 13,
               height: 1.45,
@@ -10777,7 +10889,7 @@ class SectionTitle extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 12),
       child: Text(
         text,
-        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
       ),
     );
   }
@@ -10792,7 +10904,7 @@ class SectionLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       text.toUpperCase(),
-      style: const TextStyle(
+      style: TextStyle(
         color: AppColors.textMuted,
         fontSize: 11,
         fontWeight: FontWeight.w700,
@@ -10877,7 +10989,7 @@ class AppDropdown<T> extends StatelessWidget {
       isExpanded: true,
       dropdownColor: AppColors.bgRaised,
       iconEnabledColor: AppColors.textSecondary,
-      style: const TextStyle(color: AppColors.textPrimary, fontSize: 13),
+      style: TextStyle(color: AppColors.textPrimary, fontSize: 13),
       decoration: appInputDecoration(label: '', hint: hint ?? ''),
       hint: hint == null ? null : Text(hint!, overflow: TextOverflow.ellipsis),
       items: items.map((T item) {
@@ -10900,8 +11012,8 @@ InputDecoration appInputDecoration({
   return InputDecoration(
     labelText: label.isEmpty ? null : label,
     hintText: hint,
-    hintStyle: const TextStyle(color: AppColors.textMuted),
-    labelStyle: const TextStyle(color: AppColors.textSecondary, fontSize: 13),
+    hintStyle: TextStyle(color: AppColors.textMuted),
+    labelStyle: TextStyle(color: AppColors.textSecondary, fontSize: 13),
     prefixIcon: prefixIcon == null
         ? null
         : Icon(prefixIcon, color: AppColors.textSecondary, size: 20),
@@ -10911,11 +11023,11 @@ InputDecoration appInputDecoration({
     contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
     enabledBorder: OutlineInputBorder(
       borderRadius: BorderRadius.circular(8),
-      borderSide: const BorderSide(color: AppColors.borderMid, width: 0.5),
+      borderSide: BorderSide(color: AppColors.borderMid, width: 0.5),
     ),
     focusedBorder: OutlineInputBorder(
       borderRadius: BorderRadius.circular(8),
-      borderSide: const BorderSide(color: AppColors.orange, width: 1),
+      borderSide: BorderSide(color: AppColors.orange, width: 1),
     ),
     border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
   );
@@ -10942,7 +11054,7 @@ class PrimaryButton extends StatelessWidget {
     final Widget button = FilledButton.icon(
       onPressed: onPressed,
       icon: busy
-          ? const SizedBox(
+          ? SizedBox(
               width: 18,
               height: 18,
               child: CircularProgressIndicator(
@@ -10984,7 +11096,7 @@ class GoogleSignInButton extends StatelessWidget {
         style: OutlinedButton.styleFrom(
           foregroundColor: AppColors.textPrimary,
           backgroundColor: AppColors.bgSurface,
-          side: const BorderSide(color: AppColors.borderMid, width: 0.5),
+          side: BorderSide(color: AppColors.borderMid, width: 0.5),
           minimumSize: const Size(0, 44),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
@@ -10993,7 +11105,7 @@ class GoogleSignInButton extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
             if (busy)
-              const SizedBox(
+              SizedBox(
                 width: 18,
                 height: 18,
                 child: CircularProgressIndicator(
@@ -11006,11 +11118,11 @@ class GoogleSignInButton extends StatelessWidget {
                 width: 20,
                 height: 20,
                 alignment: Alignment.center,
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                   color: AppColors.sand,
                   shape: BoxShape.circle,
                 ),
-                child: const Text(
+                child: Text(
                   'G',
                   style: TextStyle(
                     color: AppColors.bgBase,
@@ -11019,7 +11131,7 @@ class GoogleSignInButton extends StatelessWidget {
                   ),
                 ),
               ),
-            const SizedBox(width: 10),
+            SizedBox(width: 10),
             Flexible(child: Text(label, overflow: TextOverflow.ellipsis)),
           ],
         ),
@@ -11159,12 +11271,9 @@ class MetricCard extends StatelessWidget {
         children: <Widget>[
           Text(
             metric.label,
-            style: const TextStyle(
-              color: AppColors.textSecondary,
-              fontSize: 12,
-            ),
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
           ),
-          const SizedBox(height: 5),
+          SizedBox(height: 5),
           FittedBox(
             alignment: Alignment.centerLeft,
             fit: BoxFit.scaleDown,
@@ -11178,10 +11287,10 @@ class MetricCard extends StatelessWidget {
             ),
           ),
           if (metric.subtext.isNotEmpty) ...<Widget>[
-            const SizedBox(height: 3),
+            SizedBox(height: 3),
             Text(
               metric.subtext,
-              style: const TextStyle(color: AppColors.textMuted, fontSize: 11),
+              style: TextStyle(color: AppColors.textMuted, fontSize: 11),
             ),
           ],
         ],
@@ -11245,9 +11354,9 @@ class ActionCard extends StatelessWidget {
                     color: effectiveColor,
                   ),
                 ),
-                const SizedBox(height: 10),
+                SizedBox(height: 10),
                 if (locked) ...<Widget>[
-                  const Text(
+                  Text(
                     'LOCKED',
                     style: TextStyle(
                       color: AppColors.orangeText,
@@ -11255,21 +11364,18 @@ class ActionCard extends StatelessWidget {
                       fontWeight: FontWeight.w800,
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  SizedBox(height: 4),
                 ],
                 Text(
                   title,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                  ),
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
                 ),
-                const SizedBox(height: 5),
+                SizedBox(height: 5),
                 Text(
                   description,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppColors.textSecondary,
                     fontSize: 12,
                     height: 1.35,
@@ -11305,7 +11411,7 @@ class AppDataTable extends StatelessWidget {
                   columns.map((String column) {
                     return Text(
                       column,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: AppColors.textSecondary,
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
@@ -11326,7 +11432,7 @@ class AppDataTable extends StatelessWidget {
   Widget _tableRow(List<Widget> cells, {bool header = false}) {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 9),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         border: Border(
           bottom: BorderSide(color: AppColors.borderSoft, width: 0.5),
         ),
@@ -11350,20 +11456,20 @@ class AppDataTable extends StatelessWidget {
 }
 
 class StatusBadge extends StatelessWidget {
-  const StatusBadge.green(this.label, {super.key})
-    : background = const Color(0x3843A047),
+  StatusBadge.green(this.label, {super.key})
+    : background = AppColors.palm.withValues(alpha: 0.22),
       foreground = AppColors.greenText;
 
-  const StatusBadge.orange(this.label, {super.key})
-    : background = const Color(0x33FB8C00),
+  StatusBadge.orange(this.label, {super.key})
+    : background = AppColors.orange.withValues(alpha: 0.20),
       foreground = AppColors.orangeText;
 
-  const StatusBadge.red(this.label, {super.key})
-    : background = const Color(0x40EC407A),
+  StatusBadge.red(this.label, {super.key})
+    : background = AppColors.pink.withValues(alpha: 0.24),
       foreground = AppColors.pinkText;
 
-  const StatusBadge.blue(this.label, {super.key})
-    : background = const Color(0x2643A047),
+  StatusBadge.blue(this.label, {super.key})
+    : background = AppColors.palm.withValues(alpha: 0.15),
       foreground = AppColors.textSecondary;
 
   final String label;
@@ -11415,7 +11521,7 @@ class TopFruitRanking extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          const Row(
+          Row(
             children: <Widget>[
               Icon(
                 Icons.emoji_events_rounded,
@@ -11433,7 +11539,7 @@ class TopFruitRanking extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          SizedBox(height: 8),
           if (ranks.isEmpty)
             const _TopFruitEmptyState()
           else
@@ -11472,9 +11578,9 @@ class _TopFruitRankRow extends StatelessWidget {
     final double rawFill = maxRevenue <= 0 ? 0 : fruit.revenuePhp / maxRevenue;
     final double fill = rawFill <= 0 ? 0.12 : rawFill.clamp(0.18, 1.0);
     final StatusBadge restockBadge = switch (rank) {
-      1 => const StatusBadge.red('Heavy restock'),
-      2 => const StatusBadge.orange('Medium restock'),
-      _ => const StatusBadge.green('Light top-up'),
+      1 => StatusBadge.red('Heavy restock'),
+      2 => StatusBadge.orange('Medium restock'),
+      _ => StatusBadge.green('Light top-up'),
     };
     return ClipRRect(
       borderRadius: BorderRadius.circular(8),
@@ -11524,7 +11630,7 @@ class _TopFruitRankRow extends StatelessWidget {
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
+                SizedBox(width: 8),
                 Container(
                   width: 28,
                   height: 28,
@@ -11535,7 +11641,7 @@ class _TopFruitRankRow extends StatelessWidget {
                   ),
                   child: FruitMark(name: fruit.name, size: 20),
                 ),
-                const SizedBox(width: 8),
+                SizedBox(width: 8),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -11544,18 +11650,18 @@ class _TopFruitRankRow extends StatelessWidget {
                         fruit.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: AppColors.textPrimary,
                           fontSize: 12,
                           fontWeight: FontWeight.w800,
                         ),
                       ),
-                      const SizedBox(height: 1),
+                      SizedBox(height: 1),
                       Text(
                         'Avg ${fruit.averageWeightLabel}/sale - ${fruit.transactions} sales',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: AppColors.textMuted,
                           fontSize: 10,
                         ),
@@ -11563,24 +11669,24 @@ class _TopFruitRankRow extends StatelessWidget {
                     ],
                   ),
                 ),
-                const SizedBox(width: 8),
+                SizedBox(width: 8),
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: <Widget>[
                     restockBadge,
-                    const SizedBox(height: 4),
+                    SizedBox(height: 4),
                     Text(
                       money(fruit.revenuePhp),
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: AppColors.orangeText,
                         fontSize: 11,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
-                    const SizedBox(height: 1),
+                    SizedBox(height: 1),
                     Text(
                       fruit.weightLabel,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: AppColors.textMuted,
                         fontSize: 10,
                       ),
@@ -11609,7 +11715,7 @@ class _TopFruitEmptyState extends StatelessWidget {
         border: Border.all(color: AppColors.borderSoft, width: 0.5),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: const Row(
+      child: Row(
         children: <Widget>[
           Icon(
             Icons.point_of_sale_rounded,
@@ -11697,7 +11803,7 @@ class _InventoryFruitCard extends StatelessWidget {
                   ),
                   child: FruitMark(name: fruit.name, size: 24),
                 ),
-                const SizedBox(width: 9),
+                SizedBox(width: 9),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -11706,12 +11812,12 @@ class _InventoryFruitCard extends StatelessWidget {
                         fruit.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w800,
                         ),
                       ),
-                      const SizedBox(height: 1),
+                      SizedBox(height: 1),
                       Text(
                         priceConfigured || price > 0
                             ? '${money(price)}/kg'
@@ -11729,14 +11835,14 @@ class _InventoryFruitCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                const SizedBox(width: 8),
+                SizedBox(width: 8),
                 restockSignal.badge,
-                const SizedBox(width: 4),
+                SizedBox(width: 4),
                 AnimatedRotation(
                   turns: expanded ? 0.5 : 0,
                   duration: const Duration(milliseconds: 180),
                   curve: Curves.easeOutCubic,
-                  child: const Icon(
+                  child: Icon(
                     Icons.keyboard_arrow_down_rounded,
                     color: AppColors.textSecondary,
                     size: 22,
@@ -11746,11 +11852,11 @@ class _InventoryFruitCard extends StatelessWidget {
             ),
           ),
           AnimatedCrossFade(
-            firstChild: const SizedBox(width: double.infinity),
+            firstChild: SizedBox(width: double.infinity),
             secondChild: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                const SizedBox(height: 10),
+                SizedBox(height: 10),
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(10),
@@ -11764,16 +11870,16 @@ class _InventoryFruitCard extends StatelessWidget {
                     children: <Widget>[
                       Text(
                         restockSignal.label,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: AppColors.textPrimary,
                           fontSize: 12,
                           fontWeight: FontWeight.w800,
                         ),
                       ),
-                      const SizedBox(height: 3),
+                      SizedBox(height: 3),
                       Text(
                         restockSignal.detail,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: AppColors.textSecondary,
                           fontSize: 11,
                           height: 1.25,
@@ -11782,7 +11888,7 @@ class _InventoryFruitCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                const SizedBox(height: 9),
+                SizedBox(height: 9),
                 SmartStepper(
                   label: 'Enter price / kg',
                   value: price > 0 ? money(price) : 'Set price',
@@ -11802,9 +11908,9 @@ class _InventoryFruitCard extends StatelessWidget {
                   onMinus: readOnly ? null : onPriceDown,
                   onPlus: readOnly ? null : onPriceUp,
                 ),
-                const SizedBox(height: 8),
+                SizedBox(height: 8),
                 if (readOnly)
-                  const Text(
+                  Text(
                     'Preview only in Demo Mode.',
                     style: TextStyle(
                       color: AppColors.textMuted,
@@ -11848,7 +11954,7 @@ class _InventoryEmptySignal extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: AppColors.borderSoft, width: 0.5),
       ),
-      child: const Row(
+      child: Row(
         children: <Widget>[
           Icon(
             Icons.insights_rounded,
@@ -11921,19 +12027,16 @@ class SmartStepper extends StatelessWidget {
               children: <Widget>[
                 Text(
                   label,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppColors.textSecondary,
                     fontSize: 10,
                   ),
                 ),
-                const SizedBox(height: 1),
+                SizedBox(height: 1),
                 if (controller == null)
                   Text(
                     value,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w800,
-                    ),
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
                   )
                 else
                   TextField(
@@ -11963,18 +12066,18 @@ class SmartStepper extends StatelessWidget {
                       disabledBorder: InputBorder.none,
                       contentPadding: EdgeInsets.zero,
                       hintText: hint ?? value,
-                      hintStyle: const TextStyle(
+                      hintStyle: TextStyle(
                         color: AppColors.textMuted,
                         fontWeight: FontWeight.w700,
                       ),
                       prefixText: 'PHP ',
                       suffixText: '/kg',
-                      prefixStyle: const TextStyle(
+                      prefixStyle: TextStyle(
                         color: AppColors.textSecondary,
                         fontSize: 13,
                         fontWeight: FontWeight.w700,
                       ),
-                      suffixStyle: const TextStyle(
+                      suffixStyle: TextStyle(
                         color: AppColors.textMuted,
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
@@ -11985,7 +12088,7 @@ class SmartStepper extends StatelessWidget {
             ),
           ),
           SquareButton(icon: Icons.remove_rounded, onPressed: onMinus),
-          const SizedBox(width: 6),
+          SizedBox(width: 6),
           SquareButton(icon: Icons.add_rounded, onPressed: onPlus),
         ],
       ),
@@ -12013,22 +12116,19 @@ class GuidedActionRow extends StatelessWidget {
       child: Row(
         children: <Widget>[
           FruitMark(name: fruitName, size: 24),
-          const SizedBox(width: 10),
+          SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Text(
                   title,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                  ),
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
                 ),
-                const SizedBox(height: 2),
+                SizedBox(height: 2),
                 Text(
                   detail,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppColors.textSecondary,
                     fontSize: 12,
                     height: 1.3,
@@ -12037,7 +12137,7 @@ class GuidedActionRow extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(width: 8),
+          SizedBox(width: 8),
           badge,
         ],
       ),
@@ -12062,16 +12162,16 @@ class _AnalyticsEmptyState extends StatelessWidget {
       ),
       child: Row(
         children: <Widget>[
-          const Icon(
+          Icon(
             Icons.query_stats_rounded,
             color: AppColors.textSecondary,
             size: 19,
           ),
-          const SizedBox(width: 10),
+          SizedBox(width: 10),
           Expanded(
             child: Text(
               message,
-              style: const TextStyle(
+              style: TextStyle(
                 color: AppColors.textSecondary,
                 fontSize: 12,
                 height: 1.35,
@@ -12091,7 +12191,7 @@ class _ForecastEmptyState extends StatelessWidget {
   Widget build(BuildContext context) {
     return BorderRow(
       child: Row(
-        children: const <Widget>[
+        children: <Widget>[
           Icon(Icons.insights_rounded, color: AppColors.textMuted, size: 20),
           SizedBox(width: 10),
           Expanded(
@@ -12124,7 +12224,7 @@ class _ForecastChartEmptyState extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
-        children: const <Widget>[
+        children: <Widget>[
           Icon(Icons.show_chart_rounded, color: AppColors.textMuted, size: 20),
           SizedBox(width: 10),
           Expanded(
@@ -12174,31 +12274,28 @@ class ForecastTile extends StatelessWidget {
             ),
             child: Icon(icon, color: AppColors.orangeText, size: 20),
           ),
-          const SizedBox(width: 10),
+          SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Text(
                   title,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                  ),
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
                 ),
-                const SizedBox(height: 3),
+                SizedBox(height: 3),
                 Text(
                   value,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppColors.textPrimary,
                     fontSize: 16,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
-                const SizedBox(height: 2),
+                SizedBox(height: 2),
                 Text(
                   note,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppColors.textSecondary,
                     fontSize: 11,
                   ),
@@ -12252,22 +12349,19 @@ class HistoryTransactionCard extends StatelessWidget {
               muted: cancelled,
             ),
           ),
-          const SizedBox(width: 10),
+          SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Text(
                   '${transaction.fruit} - ${transaction.date}',
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
-                  ),
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
                 ),
-                const SizedBox(height: 2),
+                SizedBox(height: 2),
                 Text(
                   '${transaction.weight} · ${transaction.time}',
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppColors.textSecondary,
                     fontSize: 12,
                   ),
@@ -12280,27 +12374,25 @@ class HistoryTransactionCard extends StatelessWidget {
             children: <Widget>[
               Text(
                 transaction.price,
-                style: const TextStyle(
+                style: TextStyle(
                   color: AppColors.orangeText,
                   fontSize: 13,
                   fontWeight: FontWeight.w800,
                 ),
               ),
-              const SizedBox(height: 5),
-              cancelled
-                  ? const StatusBadge.red('Void')
-                  : const StatusBadge.green('Done'),
+              SizedBox(height: 5),
+              cancelled ? StatusBadge.red('Void') : StatusBadge.green('Done'),
             ],
           ),
           if (manageAction != null) ...<Widget>[
-            const SizedBox(width: 4),
+            SizedBox(width: 4),
             IconButton(
               tooltip: 'Manage sale',
               constraints: const BoxConstraints.tightFor(width: 34, height: 34),
               padding: EdgeInsets.zero,
               visualDensity: VisualDensity.compact,
               onPressed: manageAction,
-              icon: const Icon(
+              icon: Icon(
                 Icons.more_vert_rounded,
                 color: AppColors.textSecondary,
                 size: 20,
@@ -12322,7 +12414,7 @@ class BorderRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 11),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         border: Border(
           bottom: BorderSide(color: AppColors.borderSoft, width: 0.5),
         ),
@@ -12351,7 +12443,7 @@ class SquareButton extends StatelessWidget {
               ? AppColors.textMuted
               : AppColors.textPrimary,
           backgroundColor: AppColors.bgRaised,
-          side: const BorderSide(color: AppColors.borderMid, width: 0.5),
+          side: BorderSide(color: AppColors.borderMid, width: 0.5),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
         child: Icon(icon, size: 18),
@@ -12379,20 +12471,17 @@ class FruitChip extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           FruitMark(name: label, size: 18),
-          const SizedBox(width: 6),
+          SizedBox(width: 6),
           Text(
             label,
-            style: const TextStyle(
-              color: AppColors.textSecondary,
-              fontSize: 12,
-            ),
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
           ),
           if (onRemove != null)
             IconButton(
               onPressed: onRemove,
               constraints: const BoxConstraints.tightFor(width: 28, height: 28),
               padding: EdgeInsets.zero,
-              icon: const Icon(
+              icon: Icon(
                 Icons.close_rounded,
                 size: 16,
                 color: AppColors.pinkText,
@@ -12432,7 +12521,7 @@ class ForecastRow extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
               Icon(icon, color: AppColors.greenText, size: 19),
-              const SizedBox(width: 8),
+              SizedBox(width: 8),
               Text(name),
             ],
           ),
@@ -12441,12 +12530,9 @@ class ForecastRow extends StatelessWidget {
             children: <Widget>[
               Text(
                 value,
-                style: const TextStyle(
-                  color: AppColors.textSecondary,
-                  fontSize: 12,
-                ),
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
               ),
-              const SizedBox(width: 8),
+              SizedBox(width: 8),
               badge,
             ],
           ),
@@ -12476,22 +12562,19 @@ class RestockRow extends StatelessWidget {
       child: Row(
         children: <Widget>[
           Icon(icon, color: AppColors.greenText, size: 20),
-          const SizedBox(width: 8),
+          SizedBox(width: 8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Text(
                   title,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                  ),
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
                 ),
-                const SizedBox(height: 2),
+                SizedBox(height: 2),
                 Text(
                   detail,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppColors.textSecondary,
                     fontSize: 12,
                   ),
@@ -12535,13 +12618,10 @@ class ChartLegend extends StatelessWidget {
                     : null,
               ),
             ),
-            const SizedBox(width: 5),
+            SizedBox(width: 5),
             Text(
               labels[index],
-              style: const TextStyle(
-                color: AppColors.textSecondary,
-                fontSize: 12,
-              ),
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
             ),
           ],
         );
@@ -12682,7 +12762,7 @@ class StackedBarPainter extends CustomPainter {
           canvas,
           _formatChartValue(totals[index]),
           Offset(centerX, math.max(2, yCursor - 17)),
-          const TextStyle(
+          TextStyle(
             color: AppColors.textPrimary,
             fontSize: 9,
             fontWeight: FontWeight.w800,
@@ -12695,7 +12775,7 @@ class StackedBarPainter extends CustomPainter {
         canvas,
         labels[index],
         Offset(centerX, size.height - 18),
-        const TextStyle(color: AppColors.textMuted, fontSize: 10),
+        TextStyle(color: AppColors.textMuted, fontSize: 10),
       );
     }
 
@@ -12704,7 +12784,7 @@ class StackedBarPainter extends CustomPainter {
         canvas,
         _formatChartValue(maxTotal),
         const Offset(leftPadding, 0),
-        const TextStyle(color: AppColors.textMuted, fontSize: 10),
+        TextStyle(color: AppColors.textMuted, fontSize: 10),
         align: TextAlign.left,
       );
     }
@@ -12780,7 +12860,7 @@ class DonutChart extends StatelessWidget {
         child: Text(
           money(values.fold<int>(0, (int sum, int value) => sum + value)),
           textAlign: TextAlign.center,
-          style: const TextStyle(
+          style: TextStyle(
             color: AppColors.textPrimary,
             fontSize: 12,
             fontWeight: FontWeight.w700,
