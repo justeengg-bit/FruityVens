@@ -191,6 +191,12 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   static const String _googleServerClientId = String.fromEnvironment(
     'FRUITYVENS_GOOGLE_SERVER_CLIENT_ID',
   );
+  static const List<String> _internetProbeHosts = <String>[
+    'firebase.googleapis.com',
+    'generativelanguage.googleapis.com',
+    'accounts.google.com',
+    'google.com',
+  ];
   static const MethodChannel _deviceProfileChannel = MethodChannel(
     'fruityvens_app/device_profile',
   );
@@ -2158,6 +2164,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     }
     try {
       await _firebaseSyncService.syncFruit(_fruitSyncPayload(fruit));
+      await _publishScalePriceUpdate(fruit);
       await _database.markFruitSynced(fruit);
       if (!mounted) {
         return;
@@ -2190,6 +2197,24 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         _cloudSyncStatus = 'Firebase sync paused';
       });
     }
+  }
+
+  Future<void> _publishScalePriceUpdate(String fruit) async {
+    final int? priceCentavos = _inventorySavedPrice(fruit);
+    final String scaleDeviceId = _scaleBaseUrl.trim();
+    if (priceCentavos == null ||
+        priceCentavos <= 0 ||
+        scaleDeviceId.isEmpty ||
+        _firebaseSyncService.currentUserId == null) {
+      return;
+    }
+    final String deviceId = _deviceId ?? await _loadDeviceId();
+    await _firebaseSyncService.publishScalePriceUpdate(
+      scaleDeviceId: scaleDeviceId,
+      fruitName: fruit,
+      priceCentavos: priceCentavos,
+      sourceDeviceId: deviceId,
+    );
   }
 
   void _show(AppScreen screen) {
@@ -3502,10 +3527,27 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
   Future<bool> _hasInternetConnection() async {
     try {
+      final List<bool> probes =
+          await Future.wait(
+            _internetProbeHosts.map(_canResolveInternetHost),
+          ).timeout(
+            const Duration(seconds: 3),
+            onTimeout: () => const <bool>[false],
+          );
+      return probes.any((bool connected) => connected);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _canResolveInternetHost(String host) async {
+    try {
       final List<InternetAddress> result = await InternetAddress.lookup(
-        'accounts.google.com',
-      ).timeout(const Duration(seconds: 3));
-      return result.isNotEmpty && result.first.rawAddress.isNotEmpty;
+        host,
+      ).timeout(const Duration(seconds: 2));
+      return result.any(
+        (InternetAddress address) => address.rawAddress.isNotEmpty,
+      );
     } on SocketException {
       return false;
     } on TimeoutException {
@@ -4198,20 +4240,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       return;
     }
 
-    final bool online = await _hasInternetConnection();
-    if (!mounted) {
-      return;
-    }
-    if (!online) {
-      const String message =
-          'Forecasting needs an internet connection and the AI service. Connect to the internet, then try Generate again.';
-      setState(() {
-        _latestAiError = message;
-      });
-      _toast(message);
-      return;
-    }
-
     setState(() {
       _forecastGenerating = true;
       _latestAiError = null;
@@ -4433,9 +4461,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         cleanError.contains('connection') ||
         cleanError.contains('network') ||
         cleanError.contains('internet')) {
-      return 'Forecasting needs an internet connection and the AI service. Connect to the internet, then try Generate again.';
+      return 'FruityVens could not reach Firebase AI. If your internet is already on, check Firebase AI Logic or App Check setup, then try Generate again.';
     }
-    return 'Forecasting is unavailable right now. Connect to the internet and try again.';
+    return 'Forecasting is unavailable right now. Check Firebase AI setup or your connection, then try again.';
   }
 
   @override
@@ -4551,7 +4579,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       case AppScreen.analytics:
         return _analyticsNav();
       case AppScreen.transactions:
-        return _subNav(title: 'History');
+        return _historyNav();
       case AppScreen.dashboard:
         return _dashboardNav();
       case AppScreen.walkthrough:
@@ -6432,43 +6460,56 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       children: <Widget>[
         AppCard(
           padding: const EdgeInsets.all(14),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: AppColors.orange.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(
-                  Icons.receipt_long_rounded,
-                  color: AppColors.orangeText,
-                  size: 21,
-                ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: AppColors.orange.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(
+                      Icons.receipt_long_rounded,
+                      color: AppColors.orangeText,
+                      size: 21,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          dateLabel,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _formatDate(selectedDate),
+                          style: const TextStyle(
+                            color: AppColors.textSecondary,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      dateLabel,
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      _formatDate(selectedDate),
-                      style: const TextStyle(
-                        color: AppColors.textSecondary,
-                        fontSize: 12,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Wrap(
+              const SizedBox(height: 10),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: <Widget>[
+                  Expanded(
+                    child: Wrap(
                       spacing: 7,
                       runSpacing: 6,
                       children: <Widget>[
@@ -6477,59 +6518,28 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                           StatusBadge.orange('$cancelled cancelled'),
                       ],
                     ),
-                  ],
-                ),
-              ),
-              IconButton(
-                tooltip: 'Pick history date',
-                constraints: const BoxConstraints.tightFor(
-                  width: 36,
-                  height: 36,
-                ),
-                padding: EdgeInsets.zero,
-                visualDensity: VisualDensity.compact,
-                onPressed: () => unawaited(_pickHistoryDate()),
-                icon: const Icon(
-                  Icons.calendar_month_rounded,
-                  color: AppColors.textSecondary,
-                  size: 20,
-                ),
-              ),
-              if (!selectedToday)
-                IconButton(
-                  tooltip: 'Show today',
-                  constraints: const BoxConstraints.tightFor(
-                    width: 36,
-                    height: 36,
                   ),
-                  padding: EdgeInsets.zero,
-                  visualDensity: VisualDensity.compact,
-                  onPressed: _showTodayHistory,
-                  icon: const Icon(
-                    Icons.today_rounded,
-                    color: AppColors.orangeText,
-                    size: 20,
-                  ),
-                ),
-              const SizedBox(width: 6),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: <Widget>[
-                  const Text(
-                    'Sales',
-                    style: TextStyle(
-                      color: AppColors.textSecondary,
-                      fontSize: 11,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    money(salesTotal),
-                    style: const TextStyle(
-                      color: AppColors.orangeText,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                    ),
+                  const SizedBox(width: 10),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: <Widget>[
+                      const Text(
+                        'Sales',
+                        style: TextStyle(
+                          color: AppColors.textSecondary,
+                          fontSize: 11,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        money(salesTotal),
+                        style: const TextStyle(
+                          color: AppColors.orangeText,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -7791,7 +7801,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       ? const StatusBadge.blue('Demo')
                       : _latestAiError == null
                       ? const StatusBadge.green('Ready')
-                      : const StatusBadge.orange('Needs internet'),
+                      : const StatusBadge.orange('Check AI'),
                 ],
               ),
               if (_forecastGenerating)
@@ -9033,6 +9043,29 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       onBack: () => _show(AppScreen.dashboard),
       titleSidePadding: actions.length > 1 ? 108 : 56,
       trailing: actions,
+    );
+  }
+
+  Widget _historyNav() {
+    final bool selectedToday = _isSameDay(_selectedHistoryDate, DateTime.now());
+    return _subNav(
+      title: 'History',
+      actions: <Widget>[
+        _topBarIconButton(
+          tooltip: 'Pick history date',
+          icon: Icons.calendar_month_rounded,
+          onPressed: () => unawaited(_pickHistoryDate()),
+        ),
+        if (!selectedToday) ...<Widget>[
+          const SizedBox(width: 8),
+          _topBarIconButton(
+            tooltip: 'Show today',
+            icon: Icons.today_rounded,
+            highlighted: true,
+            onPressed: _showTodayHistory,
+          ),
+        ],
+      ],
     );
   }
 
@@ -12211,6 +12244,9 @@ class HistoryTransactionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bool cancelled = transaction.status == 'Cancelled';
+    final IconData fruitIcon =
+        _FruityVensHomeState._catalog[transaction.fruit]?.icon ??
+        Icons.local_florist_rounded;
     final VoidCallback? manageAction = onManage;
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -12232,9 +12268,7 @@ class HistoryTransactionCard extends StatelessWidget {
               borderRadius: BorderRadius.circular(8),
             ),
             child: Icon(
-              cancelled
-                  ? Icons.cancel_outlined
-                  : Icons.check_circle_outline_rounded,
+              fruitIcon,
               color: cancelled ? AppColors.pinkText : AppColors.greenText,
               size: 18,
             ),
