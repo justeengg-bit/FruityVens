@@ -1722,6 +1722,20 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     };
   }
 
+  String _scaleFruitNameForHardware(String fruit) {
+    switch (fruit) {
+      case 'Mango Carabao':
+      case 'Indian Mango':
+        return 'Mango';
+      case 'Strawberry':
+        return 'Strawberries';
+      case 'Grape':
+        return 'Grapes';
+      default:
+        return fruit;
+    }
+  }
+
   List<Map<String, Object?>> _inventorySyncPayload({Iterable<String>? fruits}) {
     return (fruits ?? _managedFruits).map(_fruitSyncPayload).toList();
   }
@@ -2183,8 +2197,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       return;
     }
     try {
-      await _firebaseSyncService.syncFruit(_fruitSyncPayload(fruit));
       await _publishScalePriceUpdate(fruit);
+      await _firebaseSyncService.syncFruit(_fruitSyncPayload(fruit));
       await _database.markFruitSynced(fruit);
       if (!mounted) {
         return;
@@ -2221,7 +2235,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
   Future<void> _publishScalePriceUpdate(String fruit) async {
     final int? priceCentavos = _inventorySavedPrice(fruit);
-    final String scaleDeviceId = _scaleBaseUrl.trim();
+    final String configuredScaleDeviceId = _scaleBaseUrl.trim();
+    final String scaleDeviceId = configuredScaleDeviceId.isEmpty
+        ? _defaultScaleDeviceId
+        : configuredScaleDeviceId;
     if (priceCentavos == null ||
         priceCentavos <= 0 ||
         scaleDeviceId.isEmpty ||
@@ -2231,7 +2248,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     final String deviceId = _deviceId ?? await _loadDeviceId();
     await _firebaseSyncService.publishScalePriceUpdate(
       scaleDeviceId: scaleDeviceId,
-      fruitName: fruit,
+      fruitName: _scaleFruitNameForHardware(fruit),
       priceCentavos: priceCentavos,
       sourceDeviceId: deviceId,
     );
