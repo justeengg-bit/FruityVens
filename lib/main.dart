@@ -2239,10 +2239,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     final String scaleDeviceId = configuredScaleDeviceId.isEmpty
         ? _defaultScaleDeviceId
         : configuredScaleDeviceId;
-    if (priceCentavos == null ||
-        priceCentavos <= 0 ||
-        scaleDeviceId.isEmpty ||
-        _firebaseSyncService.currentUserId == null) {
+    if (priceCentavos == null || priceCentavos <= 0 || scaleDeviceId.isEmpty) {
       return;
     }
     final String deviceId = _deviceId ?? await _loadDeviceId();
