@@ -3813,11 +3813,34 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     _draftPrices[fruit] = parsed;
   }
 
+  bool _commitTypedPriceFromField(String fruit) {
+    final TextEditingController? controller = _priceInputControllers[fruit];
+    if (controller == null) {
+      return true;
+    }
+    final String value = controller.text;
+    if (value.trim().isEmpty) {
+      _draftPrices[fruit] = 0;
+      return true;
+    }
+    final int? parsed = _parsePriceInputCentavos(value);
+    if (parsed == null) {
+      _toast('Enter a valid price per kg.');
+      return false;
+    }
+    _draftPrices[fruit] = parsed;
+    return true;
+  }
+
   Future<void> _saveInventoryFruit(String fruit) async {
     if (_isGuestSession) {
       _showFullAccessRequired('Pricing');
       return;
     }
+    if (!_commitTypedPriceFromField(fruit)) {
+      return;
+    }
+    FocusManager.instance.primaryFocus?.unfocus();
     final int price = _editablePriceFor(fruit);
     if (price <= 0) {
       _toast('Set $fruit price per kg first.');

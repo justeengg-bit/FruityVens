@@ -563,5 +563,23 @@ void main() {
     expect(find.text('PHP 55.75/kg'), findsOneWidget);
     lemon = await database.getManagedFruit('Lemon');
     expect(lemon?.price, 5575);
+
+    final Finder updatedLemonPriceField = find.byWidgetPredicate((
+      Widget widget,
+    ) {
+      return widget is EditableText && widget.controller.text == '55.75';
+    });
+    expect(updatedLemonPriceField, findsOneWidget);
+    await tester.enterText(updatedLemonPriceField, '62.25');
+    final Finder visibleSaveButton = find
+        .widgetWithText(PrimaryButton, 'Save')
+        .hitTestable();
+    expect(visibleSaveButton, findsOneWidget);
+    await tester.tap(visibleSaveButton);
+    await tester.pumpAndSettle();
+
+    expect(find.text('PHP 62.25/kg'), findsOneWidget);
+    lemon = await database.getManagedFruit('Lemon');
+    expect(lemon?.price, 6225);
   });
 }
