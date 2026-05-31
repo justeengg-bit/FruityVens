@@ -19,7 +19,6 @@ import 'firebase_options.dart';
 import 'services/ai_automation_client.dart';
 import 'services/camera_eye_service.dart';
 import 'services/firebase_sync_service.dart';
-import 'services/fruit_detection_service.dart';
 import 'services/report_export_service.dart';
 import 'services/scale_log_service.dart';
 import 'widgets/fruit_mark.dart';
@@ -173,10 +172,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   static const String _phoneLinkEmailKey = 'phone_link_account_email';
   static const String _phoneLinkEnabledKey = 'phone_link_enabled';
   static const String _phoneLinkPinKey = 'phone_link_pin_secret';
-  static const String _fruitDetectionModelKey = 'fruit_detection_model_id';
   static const String _themeModeKey = 'theme_mode';
   static const String _scaleDeviceIdKey = 'scale_device_id';
-  static const String _fruitDetectionAutoMode = 'auto';
   static const String _inventoryPriceConfiguredPrefix =
       'inventory_price_configured_';
   static const String _defaultScaleDeviceId = String.fromEnvironment(
@@ -193,9 +190,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     'accounts.google.com',
     'google.com',
   ];
-  static const MethodChannel _deviceProfileChannel = MethodChannel(
-    'fruityvens_app/device_profile',
-  );
   late final AppDatabase _database;
   late final bool _ownsDatabase;
   final AiAutomationClient _aiAutomationClient = const AiAutomationClient();
@@ -250,9 +244,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   String? _sessionEmail;
   String? _sessionPassword;
   String? _deviceId;
-  String _fruitDetectionModelMode = _fruitDetectionAutoMode;
-  String _fruitDetectionModelId = FruitDetectionService.defaultModelId;
-  Map<String, Object?>? _deviceProfile;
   DateTime? _lastBackGestureAt;
   Timer? _cloudSyncTimer;
   StreamSubscription<List<Map<String, Object?>>>? _inventoryLiveSubscription;
@@ -273,6 +264,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   int _selectedYear = DateTime.now().year;
   int _selectedMonth = DateTime.now().month - 1;
   DateTime _selectedHistoryDate = _historyDateOnly(DateTime.now());
+  double _historySwipeDragOffset = 0;
+  bool _historySwipeTriggered = false;
   String? _fruitToAdd;
   String? _expandedInventoryFruit;
   String? _priceConflictNotice;
@@ -587,7 +580,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     unawaited(_loadThemePreference());
     _loadRememberedAccount();
     _loadDeviceId();
-    _loadFruitDetectionModelPreference();
     unawaited(_loadScaleLogSettings());
     _loadInventoryFromDatabase();
     _loadTransactionsFromDatabase();
@@ -1450,95 +1442,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     );
   }
 
-  FruitDetectionModel get _fruitDetectionModel =>
-      FruitDetectionService.modelForId(_fruitDetectionModelId);
-
-  String get _fruitDetectionModeLabel => _fruitDetectionModelMode == 'auto'
-      ? 'Auto selected: ${_fruitDetectionModel.title}'
-      : 'Manual: ${_fruitDetectionModel.title}';
-
-  String get _deviceTierName {
-    final String? tier = _deviceProfile?['tier']?.toString();
-    return switch (tier) {
-      'high' => 'High',
-      'mid' => 'Mid',
-      'low' => 'Low',
-      _ => 'Checking',
-    };
-  }
-
-  IconData _fruitDetectionModelIcon(String modelId) {
-    return switch (modelId) {
-      'int8' => Icons.speed_rounded,
-      'float16' => Icons.balance_rounded,
-      'float32' => Icons.diamond_rounded,
-      _ => Icons.auto_awesome_rounded,
-    };
-  }
-
   String _deviceProfileSummary() {
-    final String? manufacturer = _deviceProfile?['manufacturer']?.toString();
-    final String? model = _deviceProfile?['model']?.toString();
-    final num? ram = _deviceProfile?['ramMb'] as num?;
-    final num? cores = _deviceProfile?['cpuCores'] as num?;
-    final num? sdk = _deviceProfile?['sdk'] as num?;
-    final String deviceName = <String>[
-      if (manufacturer != null && manufacturer.trim().isNotEmpty)
-        manufacturer.trim(),
-      if (model != null && model.trim().isNotEmpty) model.trim(),
-    ].join(' ');
-    final String specs = <String>[
-      if (ram != null) '${(ram / 1024).toStringAsFixed(1)}GB RAM',
-      if (cores != null) '${cores.round()} cores',
-      if (sdk != null) 'Android ${sdk.round()}',
-    ].join(' | ');
-
-    if (deviceName.isEmpty && specs.isEmpty) {
-      return 'Auto checks phone specs before scanning';
+    if (Platform.isAndroid) {
+      return 'Android phone';
     }
-    if (deviceName.isEmpty) {
-      return '$_deviceTierName phone | $specs';
+    if (Platform.isIOS) {
+      return 'iPhone';
     }
-    if (specs.isEmpty) {
-      return '$deviceName | $_deviceTierName phone';
-    }
-    return '$deviceName | $_deviceTierName | $specs';
-  }
-
-  Future<Map<String, Object?>?> _readDeviceProfile() async {
-    if (!Platform.isAndroid) {
-      return null;
-    }
-    try {
-      final Map<String, dynamic>? profile = await _deviceProfileChannel
-          .invokeMapMethod<String, dynamic>('getDeviceProfile');
-      return profile?.cast<String, Object?>();
-    } on MissingPluginException {
-      return null;
-    } on PlatformException catch (error) {
-      developer.log(
-        'Device profile check failed',
-        name: 'FruityVensDeviceProfile',
-        error: error,
-      );
-      return null;
-    }
-  }
-
-  FruitDetectionModel _autoFruitDetectionModelFor(
-    Map<String, Object?>? profile,
-  ) {
-    final String? tier = profile?['tier']?.toString();
-    return switch (tier) {
-      'low' => FruitDetectionService.modelForId('int8'),
-      'mid' => FruitDetectionService.modelForId('float16'),
-      'high' => FruitDetectionService.modelForId(
-        FruitDetectionService.defaultModelId,
-      ),
-      _ => FruitDetectionService.modelForId(
-        FruitDetectionService.defaultModelId,
-      ),
-    };
+    return Platform.operatingSystem;
   }
 
   Future<void> _loadRememberedAccount() async {
@@ -1614,30 +1525,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     return generated;
   }
 
-  Future<void> _loadFruitDetectionModelPreference() async {
-    final String? saved = await _database.getSetting(_fruitDetectionModelKey);
-    final bool savedIsManual = FruitDetectionService.builtInModels.any(
-      (FruitDetectionModel model) => model.id == saved,
-    );
-    final String mode = saved == _fruitDetectionAutoMode || saved == null
-        ? _fruitDetectionAutoMode
-        : savedIsManual
-        ? saved
-        : _fruitDetectionAutoMode;
-    final Map<String, Object?>? profile = await _readDeviceProfile();
-    final FruitDetectionModel selected = mode == _fruitDetectionAutoMode
-        ? _autoFruitDetectionModelFor(profile)
-        : FruitDetectionService.modelForId(mode);
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      _deviceProfile = profile;
-      _fruitDetectionModelMode = mode;
-      _fruitDetectionModelId = selected.id;
-    });
-  }
-
   Future<void> _loadThemePreference() async {
     final String? savedTheme = await _database.getSetting(_themeModeKey);
     final bool useLightTheme = savedTheme == 'light';
@@ -1659,38 +1546,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       setState(() {});
     }
     await _database.saveSetting(_themeModeKey, enabled ? 'light' : 'dark');
-  }
-
-  Future<bool> _setFruitDetectionModel(String mode) async {
-    final Map<String, Object?>? profile = mode == _fruitDetectionAutoMode
-        ? await _readDeviceProfile()
-        : _deviceProfile;
-    final FruitDetectionModel model = mode == _fruitDetectionAutoMode
-        ? _autoFruitDetectionModelFor(profile)
-        : FruitDetectionService.modelForId(mode);
-    final bool available = await FruitDetectionService(
-      modelId: model.id,
-    ).isModelAvailable();
-    if (!available) {
-      _toast('${model.title} is missing from this build.');
-      return false;
-    }
-
-    await _database.saveSetting(_fruitDetectionModelKey, mode);
-    if (!mounted) {
-      return false;
-    }
-    setState(() {
-      _deviceProfile = profile;
-      _fruitDetectionModelMode = mode;
-      _fruitDetectionModelId = model.id;
-    });
-    _toast(
-      mode == _fruitDetectionAutoMode
-          ? 'Auto selected ${model.title} for $_deviceTierName phone.'
-          : 'Fruit AI model set to ${model.title}.',
-    );
-    return true;
   }
 
   Future<void> _rememberAccountIfNeeded(String email) async {
@@ -1969,8 +1824,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       deviceId: deviceId,
       deviceName: _deviceProfileSummary(),
       phoneLinked: _phoneLinkEnabled,
-      modelMode: _fruitDetectionModelMode,
-      modelId: _fruitDetectionModel.id,
     );
   }
 
@@ -4326,11 +4179,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               'ssid': CameraEyeService.ssid,
               'streamUrl': CameraEyeService.streamUrl,
               'probeUrl': _cameraEyeStatus.probeUrl,
-              'processingModel': _fruitDetectionModel.title,
-              'processingModelMode': _fruitDetectionModelMode,
-              'processingModelId': _fruitDetectionModel.id,
-              'processingModelAsset': _fruitDetectionModel.assetPath,
-              'deviceTier': _deviceTierName,
               'mode': 'LAN snapshot preview through ESP32-CAM',
             },
           );
@@ -5648,180 +5496,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       builder: (BuildContext dialogContext) {
         return StatefulBuilder(
           builder: (BuildContext context, StateSetter setDialogState) {
-            Widget modelTile(FruitDetectionModel model) {
-              final bool selected = _fruitDetectionModelMode == model.id;
-              return Container(
-                margin: const EdgeInsets.only(top: 8),
-                decoration: BoxDecoration(
-                  color: selected
-                      ? AppColors.palm.withValues(alpha: 0.12)
-                      : AppColors.bgSurface,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: selected ? AppColors.palm : AppColors.borderSoft,
-                  ),
-                ),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(8),
-                  onTap: () async {
-                    final bool changed = await _setFruitDetectionModel(
-                      model.id,
-                    );
-                    if (changed && mounted) {
-                      setDialogState(() {});
-                    }
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 10,
-                    ),
-                    child: Row(
-                      children: <Widget>[
-                        Icon(
-                          selected
-                              ? Icons.radio_button_checked_rounded
-                              : Icons.radio_button_off_rounded,
-                          color: selected
-                              ? AppColors.palm
-                              : AppColors.textSecondary,
-                          size: 20,
-                        ),
-                        SizedBox(width: 8),
-                        Icon(
-                          _fruitDetectionModelIcon(model.id),
-                          color: selected
-                              ? AppColors.greenText
-                              : AppColors.textSecondary,
-                          size: 20,
-                        ),
-                        SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: <Widget>[
-                              Row(
-                                children: <Widget>[
-                                  Expanded(
-                                    child: Text(
-                                      model.title,
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                    ),
-                                  ),
-                                  if (model.recommended)
-                                    StatusBadge.green('BEST')
-                                  else
-                                    StatusBadge.blue(model.precision),
-                                ],
-                              ),
-                              SizedBox(height: 3),
-                              Text(
-                                model.description,
-                                style: TextStyle(
-                                  color: AppColors.textMuted,
-                                  fontSize: 11,
-                                  height: 1.25,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            }
-
-            Widget autoModelTile() {
-              final bool selected =
-                  _fruitDetectionModelMode == _fruitDetectionAutoMode;
-              return Container(
-                margin: const EdgeInsets.only(top: 8),
-                decoration: BoxDecoration(
-                  color: selected
-                      ? AppColors.palm.withValues(alpha: 0.12)
-                      : AppColors.bgSurface,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: selected ? AppColors.palm : AppColors.borderSoft,
-                  ),
-                ),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(8),
-                  onTap: () async {
-                    final bool changed = await _setFruitDetectionModel(
-                      _fruitDetectionAutoMode,
-                    );
-                    if (changed && mounted) {
-                      setDialogState(() {});
-                    }
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 10,
-                    ),
-                    child: Row(
-                      children: <Widget>[
-                        Icon(
-                          selected
-                              ? Icons.radio_button_checked_rounded
-                              : Icons.radio_button_off_rounded,
-                          color: selected
-                              ? AppColors.palm
-                              : AppColors.textSecondary,
-                          size: 20,
-                        ),
-                        SizedBox(width: 8),
-                        Icon(
-                          Icons.phone_android_rounded,
-                          color: selected
-                              ? AppColors.greenText
-                              : AppColors.textSecondary,
-                          size: 20,
-                        ),
-                        SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: <Widget>[
-                              Row(
-                                children: <Widget>[
-                                  Expanded(
-                                    child: Text(
-                                      'Auto phone check',
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                    ),
-                                  ),
-                                  StatusBadge.green(_fruitDetectionModel.title),
-                                ],
-                              ),
-                              SizedBox(height: 3),
-                              Text(
-                                '${_deviceProfileSummary()} - Low uses INT8, mid uses Float16, high uses Best.',
-                                style: TextStyle(
-                                  color: AppColors.textMuted,
-                                  fontSize: 11,
-                                  height: 1.25,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            }
-
             return AlertDialog(
               backgroundColor: AppColors.bgCard,
               title: Text('Account Settings'),
@@ -5953,53 +5627,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                           ),
                         ],
                       ),
-                      Divider(color: AppColors.borderSoft, height: 28),
-                      Row(
-                        children: <Widget>[
-                          Container(
-                            width: 36,
-                            height: 36,
-                            decoration: BoxDecoration(
-                              color: AppColors.orange.withValues(alpha: 0.14),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Icon(
-                              _fruitDetectionModelIcon(_fruitDetectionModel.id),
-                              color: AppColors.orangeText,
-                              size: 20,
-                            ),
-                          ),
-                          SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: <Widget>[
-                                Text(
-                                  'Fruit AI model',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                                SizedBox(height: 3),
-                                Text(
-                                  '$_fruitDetectionModeLabel - ${_fruitDetectionModel.fileName}',
-                                  style: TextStyle(
-                                    color: AppColors.textSecondary,
-                                    fontSize: 12,
-                                    height: 1.35,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      SizedBox(height: 6),
-                      autoModelTile(),
-                      for (final FruitDetectionModel model
-                          in FruitDetectionService.builtInModels)
-                        modelTile(model),
                       Divider(color: AppColors.borderSoft, height: 28),
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -6528,6 +6155,26 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     });
   }
 
+  void _shiftHistoryDateBy(int dayOffset) {
+    if (dayOffset == 0) {
+      return;
+    }
+    final DateTime target = _clampedHistoryDate(
+      _selectedHistoryDate.add(Duration(days: dayOffset)),
+    );
+    if (_isSameDay(target, _selectedHistoryDate)) {
+      return;
+    }
+    setState(() {
+      _selectedHistoryDate = target;
+    });
+  }
+
+  void _resetHistorySwipeTracking() {
+    _historySwipeDragOffset = 0;
+    _historySwipeTriggered = false;
+  }
+
   Widget _transactionHistoryScreen() {
     final DateTime selectedDate = _selectedHistoryDate;
     final bool selectedToday = _isSameDay(selectedDate, DateTime.now());
@@ -6549,119 +6196,144 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       return sum + _parsePesoAmount(transaction.price);
     });
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        AppCard(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Container(
-                    width: 42,
-                    height: 42,
-                    decoration: BoxDecoration(
-                      color: AppColors.orange.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(8),
+    return GestureDetector(
+      key: const ValueKey<String>('history-swipe-area'),
+      behavior: HitTestBehavior.opaque,
+      onHorizontalDragStart: (_) {
+        _resetHistorySwipeTracking();
+      },
+      onHorizontalDragUpdate: (DragUpdateDetails details) {
+        if (_historySwipeTriggered) {
+          return;
+        }
+        _historySwipeDragOffset += details.primaryDelta ?? 0;
+        if (_historySwipeDragOffset >= 56) {
+          _historySwipeTriggered = true;
+          _shiftHistoryDateBy(-1);
+        } else if (_historySwipeDragOffset <= -56) {
+          _historySwipeTriggered = true;
+          _shiftHistoryDateBy(1);
+        }
+      },
+      onHorizontalDragCancel: _resetHistorySwipeTracking,
+      onHorizontalDragEnd: (_) {
+        _resetHistorySwipeTracking();
+      },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          AppCard(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: AppColors.orange.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        Icons.receipt_long_rounded,
+                        color: AppColors.orangeText,
+                        size: 21,
+                      ),
                     ),
-                    child: Icon(
-                      Icons.receipt_long_rounded,
-                      color: AppColors.orangeText,
-                      size: 21,
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            dateLabel,
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            _formatDate(selectedDate),
+                            style: TextStyle(
+                              color: AppColors.textSecondary,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                  ],
+                ),
+                SizedBox(height: 10),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: <Widget>[
+                    Expanded(
+                      child: Wrap(
+                        spacing: 7,
+                        runSpacing: 6,
+                        children: <Widget>[
+                          StatusBadge.green('$sold sold'),
+                          if (cancelled > 0)
+                            StatusBadge.orange('$cancelled cancelled'),
+                        ],
+                      ),
+                    ),
+                    SizedBox(width: 10),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
                       children: <Widget>[
                         Text(
-                          dateLabel,
+                          'Sales',
                           style: TextStyle(
-                            fontSize: 15,
+                            color: AppColors.textSecondary,
+                            fontSize: 11,
+                          ),
+                        ),
+                        SizedBox(height: 3),
+                        Text(
+                          money(salesTotal),
+                          style: TextStyle(
+                            color: AppColors.orangeText,
+                            fontSize: 16,
                             fontWeight: FontWeight.w800,
                           ),
                         ),
-                        SizedBox(height: 2),
-                        Text(
-                          _formatDate(selectedDate),
-                          style: TextStyle(
-                            color: AppColors.textSecondary,
-                            fontSize: 12,
-                          ),
-                        ),
                       ],
                     ),
-                  ),
-                ],
-              ),
-              SizedBox(height: 10),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: <Widget>[
-                  Expanded(
-                    child: Wrap(
-                      spacing: 7,
-                      runSpacing: 6,
-                      children: <Widget>[
-                        StatusBadge.green('$sold sold'),
-                        if (cancelled > 0)
-                          StatusBadge.orange('$cancelled cancelled'),
-                      ],
-                    ),
-                  ),
-                  SizedBox(width: 10),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: <Widget>[
-                      Text(
-                        'Sales',
-                        style: TextStyle(
-                          color: AppColors.textSecondary,
-                          fontSize: 11,
-                        ),
-                      ),
-                      SizedBox(height: 3),
-                      Text(
-                        money(salesTotal),
-                        style: TextStyle(
-                          color: AppColors.orangeText,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ],
+                  ],
+                ),
+              ],
+            ),
           ),
-        ),
-        SizedBox(height: 12),
-        Column(
-          children: transactions.isEmpty
-              ? <Widget>[
-                  _emptyStateCard(
-                    icon: Icons.receipt_long_rounded,
-                    title: 'No transaction records',
-                    detail: selectedToday
-                        ? 'No sales recorded today.'
-                        : 'No sales recorded on ${_formatDate(selectedDate)}.',
-                  ),
-                ]
-              : transactions.map((TransactionData transaction) {
-                  return HistoryTransactionCard(
-                    transaction: transaction,
-                    onManage: _isGuestSession || transaction.saleId == null
-                        ? null
-                        : () => unawaited(_showTransactionActions(transaction)),
-                  );
-                }).toList(),
-        ),
-      ],
+          SizedBox(height: 12),
+          Column(
+            children: transactions.isEmpty
+                ? <Widget>[
+                    _emptyStateCard(
+                      icon: Icons.receipt_long_rounded,
+                      title: 'No transaction records',
+                      detail: selectedToday
+                          ? 'No sales recorded today.'
+                          : 'No sales recorded on ${_formatDate(selectedDate)}.',
+                    ),
+                  ]
+                : transactions.map((TransactionData transaction) {
+                    return HistoryTransactionCard(
+                      transaction: transaction,
+                      onManage: _isGuestSession || transaction.saleId == null
+                          ? null
+                          : () =>
+                                unawaited(_showTransactionActions(transaction)),
+                    );
+                  }).toList(),
+          ),
+        ],
+      ),
     );
   }
 
@@ -7612,15 +7284,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                                             'Probe',
                                             _cameraEyeStatus.probeUrl ??
                                                 'Not reachable yet',
-                                          ),
-                                          SizedBox(height: 6),
-                                          _cameraInfoRow(
-                                            'Model',
-                                            _fruitDetectionModelMode ==
-                                                    _fruitDetectionAutoMode
-                                                ? 'Auto ${_fruitDetectionModel.precision}'
-                                                : _fruitDetectionModel
-                                                      .precision,
                                           ),
                                         ],
                                       ),

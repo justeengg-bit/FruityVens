@@ -1,8 +1,6 @@
 package com.example.fruityvens_app
 
-import android.app.ActivityManager
 import android.content.ContentValues
-import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Environment
@@ -15,7 +13,6 @@ import java.io.FileOutputStream
 
 class MainActivity : FlutterFragmentActivity() {
     private val reportChannel = "fruityvens_app/report_saver"
-    private val deviceProfileChannel = "fruityvens_app/device_profile"
     private val createPdfRequestCode = 2407
     private var pendingPdfResult: MethodChannel.Result? = null
     private var pendingPdfBytes: ByteArray? = null
@@ -66,13 +63,6 @@ class MainActivity : FlutterFragmentActivity() {
                     else -> result.notImplemented()
                 }
             }
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, deviceProfileChannel)
-            .setMethodCallHandler { call, result ->
-                when (call.method) {
-                    "getDeviceProfile" -> result.success(getDeviceProfile())
-                    else -> result.notImplemented()
-                }
-            }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -115,27 +105,6 @@ class MainActivity : FlutterFragmentActivity() {
         }
 
         super.onActivityResult(requestCode, resultCode, data)
-    }
-
-    private fun getDeviceProfile(): Map<String, Any> {
-        val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        val memoryInfo = ActivityManager.MemoryInfo()
-        activityManager.getMemoryInfo(memoryInfo)
-        val ramMb = memoryInfo.totalMem / (1024L * 1024L)
-        val cores = Runtime.getRuntime().availableProcessors()
-        val tier = when {
-            ramMb >= 7000 && cores >= 8 -> "high"
-            ramMb >= 3500 && cores >= 6 -> "mid"
-            else -> "low"
-        }
-        return mapOf(
-            "manufacturer" to Build.MANUFACTURER.orEmpty(),
-            "model" to Build.MODEL.orEmpty(),
-            "sdk" to Build.VERSION.SDK_INT,
-            "ramMb" to ramMb,
-            "cpuCores" to cores,
-            "tier" to tier,
-        )
     }
 
     private fun openPdfSavePicker(

@@ -5,8 +5,6 @@ import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_ai/firebase_ai.dart';
 import 'package:http/http.dart' as http;
 
-import 'fruit_detection_service.dart';
-
 class AiAutomationResult {
   const AiAutomationResult({
     required this.summary,
@@ -202,27 +200,10 @@ ${jsonEncode(forecastInput)}
   Future<Map<String, dynamic>> detectFruits({
     required String imagePath,
     double confidenceThreshold = 0.5,
-    String modelId = FruitDetectionService.defaultModelId,
   }) async {
-    try {
-      final FruitDetectionResult offlineResult = await FruitDetectionService(
-        modelId: modelId,
-        confidenceThreshold: confidenceThreshold,
-      ).detectFromFile(imagePath);
-      return <String, dynamic>{
-        ...offlineResult.toJson(),
-        'success': true,
-        'source': offlineResult.modelVersion,
-      };
-    } on FruitDetectionException {
-      // Fall through to the network proxy for development machines that still
-      // run the Python/Ultralytics bridge.
-    }
-
     final String requestBody = jsonEncode(<String, Object?>{
       'image_path': imagePath,
       'confidence': confidenceThreshold,
-      'model_id': modelId,
     });
     final List<String> connectionErrors = <String>[];
 

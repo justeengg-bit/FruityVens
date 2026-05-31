@@ -35,11 +35,9 @@ dependencies:
   firebase_database: ^12.3.0
   flutter:
     sdk: flutter
-  flutter_onnxruntime: ^1.7.0
   google_sign_in: ^7.2.0
   crypto: ^3.0.6
   http: ^1.6.0
-  image: ^4.5.4
   local_auth: ^3.0.1
   path: ^1.9.1
   pdf: ^3.12.0
@@ -61,13 +59,6 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
-
-  assets:
-    - models/best.onnx
-    - models/best_int8.onnx
-    - models/best_float16.onnx
-    - models/best_float32.onnx
-    - models/best_ncnn_model/metadata.yaml
 
   # To add assets to your application, add an assets section, like this:
   # assets:

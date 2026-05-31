@@ -512,6 +512,63 @@ void main() {
     expect(find.textContaining('Banana'), findsNothing);
   });
 
+  testWidgets('History swipes between days and stops at today', (
+    WidgetTester tester,
+  ) async {
+    final AppDatabase database = AppDatabase.inMemory();
+    final DateTime now = DateTime.now();
+    final DateTime today = DateTime(now.year, now.month, now.day, 10, 15);
+    final DateTime previousDay = today.subtract(const Duration(days: 1));
+
+    await database.addSale(
+      fruitName: 'Mango',
+      weightGrams: 1200,
+      unitPrice: 6000,
+      totalPrice: 7200,
+      soldAt: today,
+    );
+    await database.addSale(
+      fruitName: 'Banana',
+      weightGrams: 1000,
+      unitPrice: 3500,
+      totalPrice: 3500,
+      soldAt: previousDay,
+    );
+
+    await tester.pumpWidget(FruityVensApp(database: database));
+    await createAccountAndOpenDashboard(tester);
+
+    await tester.ensureVisible(find.text('View more'));
+    await tester.tap(find.text('View more'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Mango'), findsWidgets);
+    expect(find.textContaining('Banana'), findsNothing);
+    final Finder historySwipeArea = find.byKey(
+      const ValueKey<String>('history-swipe-area'),
+    );
+    expect(historySwipeArea, findsOneWidget);
+
+    await tester.drag(historySwipeArea, const Offset(300, 0));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Banana'), findsWidgets);
+    expect(find.textContaining('Mango'), findsNothing);
+    expect(find.byTooltip('Show today'), findsOneWidget);
+
+    await tester.drag(historySwipeArea, const Offset(-300, 0));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Mango'), findsWidgets);
+    expect(find.textContaining('Banana'), findsNothing);
+
+    await tester.drag(historySwipeArea, const Offset(-300, 0));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Mango'), findsWidgets);
+    expect(find.textContaining('Banana'), findsNothing);
+  });
+
   testWidgets('Inventory adds Philippine fruits and saves typed prices', (
     WidgetTester tester,
   ) async {

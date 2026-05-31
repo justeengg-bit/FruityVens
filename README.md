@@ -13,7 +13,6 @@ operations.
 - Firebase authentication, Google sign-in, and cloud database sync
 - Offline local storage with SQLite
 - AI-assisted forecasting and automation support
-- ONNX fruit detection model assets for offline scanning
 - ESP32-CAM integration for camera-based sensor input
 - PDF/report export support
 
@@ -22,7 +21,6 @@ operations.
 - Flutter and Dart
 - Firebase Auth, Realtime Database, App Check, and Firebase AI
 - SQLite through `sqflite`
-- ONNX Runtime for local model inference
 - ESP32-CAM firmware support
 - Optional local OpenAI proxy tooling for AI automation
 

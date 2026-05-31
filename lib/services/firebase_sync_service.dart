@@ -344,8 +344,6 @@ class FirebaseSyncService {
     required String deviceId,
     required String deviceName,
     required bool phoneLinked,
-    String? modelMode,
-    String? modelId,
   }) async {
     final String? uid = currentUserId;
     final FirebaseDatabase? database = _database;
@@ -359,8 +357,6 @@ class FirebaseSyncService {
           'deviceId': deviceId,
           'deviceName': deviceName,
           'phoneLinked': phoneLinked,
-          if (modelMode != null) 'fruitModelMode': modelMode,
-          if (modelId != null) 'fruitModelId': modelId,
           'active': true,
           'lastActiveAt': ServerValue.timestamp,
         });
