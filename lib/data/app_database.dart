@@ -1,5 +1,17 @@
+import 'dart:convert';
+
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
+
+enum AccountRole {
+  owner,
+  worker;
+
+  static AccountRole parse(Object? value) {
+    final String clean = (value ?? '').toString().trim().toLowerCase();
+    return clean == worker.name ? worker : owner;
+  }
+}
 
 class LocalFruit {
   const LocalFruit({
@@ -92,17 +104,26 @@ class LocalAccount {
     required this.name,
     required this.email,
     required this.password,
+    this.role = AccountRole.owner,
+    this.ownerUid,
+    this.firebaseUid,
   });
 
   final String name;
   final String email;
   final String password;
+  final AccountRole role;
+  final String? ownerUid;
+  final String? firebaseUid;
 
   factory LocalAccount.fromMap(Map<String, Object?> map) {
     return LocalAccount(
       name: map['name']! as String,
       email: map['email']! as String,
       password: map['password']! as String,
+      role: AccountRole.parse(map['role']),
+      ownerUid: map['owner_uid'] as String?,
+      firebaseUid: map['firebase_uid'] as String?,
     );
   }
 }
@@ -157,6 +178,92 @@ class LocalSale {
   }
 }
 
+class LocalWorkerRequest {
+  const LocalWorkerRequest({
+    this.id,
+    required this.requestId,
+    required this.type,
+    required this.status,
+    required this.ownerUid,
+    required this.workerUid,
+    required this.workerName,
+    this.saleCloudId,
+    required this.originalPayload,
+    required this.requestedPayload,
+    required this.createdAt,
+    this.reviewedAt,
+    this.synced = false,
+  });
+
+  final int? id;
+  final String requestId;
+  final String type;
+  final String status;
+  final String ownerUid;
+  final String workerUid;
+  final String workerName;
+  final String? saleCloudId;
+  final String originalPayload;
+  final String requestedPayload;
+  final DateTime createdAt;
+  final DateTime? reviewedAt;
+  final bool synced;
+
+  factory LocalWorkerRequest.fromMap(Map<String, Object?> map) {
+    return LocalWorkerRequest(
+      id: map['id'] as int?,
+      requestId: map['request_id']! as String,
+      type: map['type']! as String,
+      status: map['status']! as String,
+      ownerUid: map['owner_uid']! as String,
+      workerUid: map['worker_uid']! as String,
+      workerName: map['worker_name']! as String,
+      saleCloudId: map['sale_cloud_id'] as String?,
+      originalPayload: map['original_payload']! as String,
+      requestedPayload: map['requested_payload']! as String,
+      createdAt: DateTime.parse(map['created_at']! as String),
+      reviewedAt: DateTime.tryParse((map['reviewed_at'] as String?) ?? ''),
+      synced: ((map['synced'] as int?) ?? 0) == 1,
+    );
+  }
+
+  Map<String, Object?> get requestedData {
+    return _decodeJsonObject(requestedPayload);
+  }
+
+  Map<String, Object?> get originalData {
+    return _decodeJsonObject(originalPayload);
+  }
+
+  Map<String, Object?> toCloudMap() {
+    return <String, Object?>{
+      'requestId': requestId,
+      'type': type,
+      'status': status,
+      'ownerUid': ownerUid,
+      'workerUid': workerUid,
+      'workerName': workerName,
+      if (saleCloudId != null && saleCloudId!.isNotEmpty)
+        'saleCloudId': saleCloudId,
+      'originalPayload': originalData,
+      'requestedPayload': requestedData,
+      'createdAt': createdAt.toIso8601String(),
+      if (reviewedAt != null) 'reviewedAt': reviewedAt!.toIso8601String(),
+    };
+  }
+
+  static Map<String, Object?> _decodeJsonObject(String value) {
+    if (value.trim().isEmpty) {
+      return <String, Object?>{};
+    }
+    final Object? decoded = jsonDecode(value);
+    if (decoded is Map) {
+      return Map<String, Object?>.from(decoded);
+    }
+    return <String, Object?>{};
+  }
+}
+
 class AppDatabase {
   AppDatabase() : _memory = false;
 
@@ -169,8 +276,10 @@ class AppDatabase {
   final Map<String, String> _memorySettings = <String, String>{};
   final List<LocalSale> _memorySales = <LocalSale>[];
   final List<LocalPriceChange> _memoryPriceChanges = <LocalPriceChange>[];
+  final List<LocalWorkerRequest> _memoryWorkerRequests = <LocalWorkerRequest>[];
   int _memorySaleId = 0;
   int _memoryPriceChangeId = 0;
+  int _memoryWorkerRequestId = 0;
 
   Future<void> close() async {
     await _db?.close();
@@ -187,7 +296,7 @@ class AppDatabase {
     if (_memory) {
       opened = await openDatabase(
         inMemoryDatabasePath,
-        version: 5,
+        version: 6,
         onCreate: _createSchema,
         onUpgrade: _upgradeSchema,
       );
@@ -195,7 +304,7 @@ class AppDatabase {
       final String dbPath = await getDatabasesPath();
       opened = await openDatabase(
         p.join(dbPath, 'fruityvens.sqlite'),
-        version: 5,
+        version: 6,
         onCreate: _createSchema,
         onUpgrade: _upgradeSchema,
       );
@@ -259,6 +368,7 @@ class AppDatabase {
     await _createAuthSchema(db);
     await _createSettingsSchema(db);
     await _createPriceHistorySchema(db);
+    await _createWorkerRequestSchema(db);
   }
 
   Future<void> _upgradeSchema(
@@ -306,6 +416,27 @@ class AppDatabase {
         'total_price = total_price * 100 WHERE total_price > 0',
       );
     }
+    if (oldVersion < 6) {
+      await _addColumnIfMissing(
+        db,
+        table: 'local_accounts',
+        column: 'role',
+        definition: "TEXT NOT NULL DEFAULT 'owner'",
+      );
+      await _addColumnIfMissing(
+        db,
+        table: 'local_accounts',
+        column: 'owner_uid',
+        definition: 'TEXT',
+      );
+      await _addColumnIfMissing(
+        db,
+        table: 'local_accounts',
+        column: 'firebase_uid',
+        definition: 'TEXT',
+      );
+      await _createWorkerRequestSchema(db);
+    }
     await db.execute(
       'CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_transactions_cloud_id '
       'ON sales_transactions(cloud_id) WHERE cloud_id IS NOT NULL',
@@ -335,6 +466,9 @@ class AppDatabase {
         email TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         password TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'owner',
+        owner_uid TEXT,
+        firebase_uid TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       )
@@ -363,6 +497,26 @@ class AppDatabase {
         device_id TEXT NOT NULL,
         note TEXT NOT NULL,
         created_at TEXT NOT NULL
+      )
+    ''');
+  }
+
+  Future<void> _createWorkerRequestSchema(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS worker_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        request_id TEXT NOT NULL UNIQUE,
+        type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        owner_uid TEXT NOT NULL,
+        worker_uid TEXT NOT NULL,
+        worker_name TEXT NOT NULL,
+        sale_cloud_id TEXT,
+        original_payload TEXT NOT NULL,
+        requested_payload TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        reviewed_at TEXT,
+        synced INTEGER NOT NULL DEFAULT 0
       )
     ''');
   }
@@ -406,6 +560,9 @@ class AppDatabase {
     required String name,
     required String email,
     required String password,
+    AccountRole role = AccountRole.owner,
+    String? ownerUid,
+    String? firebaseUid,
   }) async {
     final String cleanEmail = email.trim().toLowerCase();
     if (_memory) {
@@ -413,6 +570,9 @@ class AppDatabase {
         name: name,
         email: cleanEmail,
         password: password,
+        role: role,
+        ownerUid: ownerUid,
+        firebaseUid: firebaseUid,
       );
       return;
     }
@@ -423,6 +583,9 @@ class AppDatabase {
       'email': cleanEmail,
       'name': name,
       'password': password,
+      'role': role.name,
+      'owner_uid': ownerUid,
+      'firebase_uid': firebaseUid,
       'created_at': now,
       'updated_at': now,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
@@ -817,6 +980,133 @@ class AppDatabase {
     );
   }
 
+  Future<void> updateSale({
+    int? id,
+    String? cloudId,
+    required String fruitName,
+    required int weightGrams,
+    required int unitPrice,
+    required int totalPrice,
+    required String status,
+    required DateTime soldAt,
+  }) async {
+    final String cleanStatus = status.trim().toLowerCase();
+    if (cleanStatus.isEmpty || (id == null && (cloudId ?? '').isEmpty)) {
+      return;
+    }
+
+    if (_memory) {
+      final int index = _memorySales.indexWhere((LocalSale sale) {
+        if (id != null) {
+          return sale.id == id;
+        }
+        return sale.cloudId == cloudId;
+      });
+      if (index < 0) {
+        return;
+      }
+      final LocalSale sale = _memorySales[index];
+      _memorySales[index] = LocalSale(
+        id: sale.id,
+        cloudId: sale.cloudId ?? cloudId,
+        fruitName: fruitName,
+        weightGrams: weightGrams,
+        unitPrice: unitPrice,
+        totalPrice: totalPrice,
+        status: cleanStatus,
+        soldAt: soldAt,
+        synced: false,
+      );
+      _memorySales.sort((LocalSale a, LocalSale b) {
+        return b.soldAt.compareTo(a.soldAt);
+      });
+      return;
+    }
+
+    final Database db = await _database;
+    final String where = id != null ? 'id = ?' : 'cloud_id = ?';
+    final List<Object> whereArgs = <Object>[id ?? cloudId!];
+    final int updated = await db.update(
+      'sales_transactions',
+      <String, Object?>{
+        if (cloudId != null && cloudId.isNotEmpty) 'cloud_id': cloudId,
+        'fruit_name': fruitName,
+        'weight_grams': weightGrams,
+        'unit_price': unitPrice,
+        'total_price': totalPrice,
+        'status': cleanStatus,
+        'sold_at': soldAt.toIso8601String(),
+        'synced': 0,
+      },
+      where: where,
+      whereArgs: whereArgs,
+    );
+    if (updated == 0) {
+      return;
+    }
+    await enqueueSync(
+      entityType: 'transaction',
+      entityId: (id ?? cloudId!).toString(),
+      action: 'sale_update',
+      payload: jsonEncode(<String, Object?>{
+        if (id != null) 'id': id,
+        if (cloudId != null) 'cloudId': cloudId,
+        'fruitName': fruitName,
+        'weightGrams': weightGrams,
+        'unitPrice': unitPrice,
+        'totalPrice': totalPrice,
+        'status': cleanStatus,
+        'soldAt': soldAt.toIso8601String(),
+      }),
+    );
+  }
+
+  Future<LocalSale?> getSaleById(int id) async {
+    if (_memory) {
+      for (final LocalSale sale in _memorySales) {
+        if (sale.id == id) {
+          return sale;
+        }
+      }
+      return null;
+    }
+
+    final Database db = await _database;
+    final List<Map<String, Object?>> rows = await db.query(
+      'sales_transactions',
+      where: 'id = ?',
+      whereArgs: <Object>[id],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return null;
+    }
+    return LocalSale.fromMap(rows.first);
+  }
+
+  Future<LocalSale?> getSaleByCloudId(String cloudId) async {
+    if (_memory) {
+      for (final LocalSale sale in _memorySales) {
+        if (sale.cloudId == cloudId) {
+          return sale;
+        }
+      }
+      return null;
+    }
+
+    final Database db = await _database;
+    final List<Map<String, Object?>> rows = await db.query(
+      'sales_transactions',
+      where: 'cloud_id = ?',
+      whereArgs: <Object>[cloudId],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return null;
+    }
+    return LocalSale.fromMap(rows.first);
+  }
+
   Future<bool> saleExistsByCloudId(String cloudId) async {
     if (_memory) {
       return _memorySales.any((LocalSale sale) => sale.cloudId == cloudId);
@@ -1082,6 +1372,255 @@ class AppDatabase {
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  Future<void> saveWorkerRequest({
+    required String requestId,
+    required String type,
+    required String status,
+    required String ownerUid,
+    required String workerUid,
+    required String workerName,
+    String? saleCloudId,
+    Map<String, Object?> originalPayload = const <String, Object?>{},
+    required Map<String, Object?> requestedPayload,
+    DateTime? createdAt,
+    DateTime? reviewedAt,
+    bool synced = false,
+  }) async {
+    final DateTime effectiveCreatedAt = createdAt ?? DateTime.now();
+    final String originalJson = jsonEncode(originalPayload);
+    final String requestedJson = jsonEncode(requestedPayload);
+    if (_memory) {
+      final int existingIndex = _memoryWorkerRequests.indexWhere(
+        (LocalWorkerRequest request) => request.requestId == requestId,
+      );
+      final LocalWorkerRequest request = LocalWorkerRequest(
+        id: existingIndex >= 0
+            ? _memoryWorkerRequests[existingIndex].id
+            : ++_memoryWorkerRequestId,
+        requestId: requestId,
+        type: type,
+        status: status,
+        ownerUid: ownerUid,
+        workerUid: workerUid,
+        workerName: workerName,
+        saleCloudId: saleCloudId,
+        originalPayload: originalJson,
+        requestedPayload: requestedJson,
+        createdAt: effectiveCreatedAt,
+        reviewedAt: reviewedAt,
+        synced: synced,
+      );
+      if (existingIndex >= 0) {
+        _memoryWorkerRequests[existingIndex] = request;
+      } else {
+        _memoryWorkerRequests.insert(0, request);
+      }
+      return;
+    }
+
+    final Database db = await _database;
+    await db.insert('worker_requests', <String, Object?>{
+      'request_id': requestId,
+      'type': type,
+      'status': status,
+      'owner_uid': ownerUid,
+      'worker_uid': workerUid,
+      'worker_name': workerName,
+      'sale_cloud_id': saleCloudId,
+      'original_payload': originalJson,
+      'requested_payload': requestedJson,
+      'created_at': effectiveCreatedAt.toIso8601String(),
+      'reviewed_at': reviewedAt?.toIso8601String(),
+      'synced': synced ? 1 : 0,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> saveWorkerRequestFromCloud(Map<String, Object?> request) async {
+    final String? requestId = request['requestId'] as String?;
+    final String? type = request['type'] as String?;
+    final String? status = request['status'] as String?;
+    final String? ownerUid = request['ownerUid'] as String?;
+    final String? workerUid = request['workerUid'] as String?;
+    final String workerName = request['workerName'] as String? ?? 'Worker';
+    final String? createdAt = request['createdAt'] as String?;
+    if (requestId == null ||
+        requestId.isEmpty ||
+        type == null ||
+        type.isEmpty ||
+        status == null ||
+        status.isEmpty ||
+        ownerUid == null ||
+        ownerUid.isEmpty ||
+        workerUid == null ||
+        workerUid.isEmpty ||
+        createdAt == null ||
+        DateTime.tryParse(createdAt) == null) {
+      return;
+    }
+
+    await saveWorkerRequest(
+      requestId: requestId,
+      type: type,
+      status: status,
+      ownerUid: ownerUid,
+      workerUid: workerUid,
+      workerName: workerName,
+      saleCloudId: request['saleCloudId'] as String?,
+      originalPayload: _mapValue(request['originalPayload']),
+      requestedPayload: _mapValue(request['requestedPayload']),
+      createdAt: DateTime.parse(createdAt),
+      reviewedAt: DateTime.tryParse((request['reviewedAt'] as String?) ?? ''),
+      synced: true,
+    );
+  }
+
+  Future<List<LocalWorkerRequest>> getWorkerRequests({
+    String? status,
+    String? ownerUid,
+  }) async {
+    if (_memory) {
+      final String? cleanStatus = status?.trim().toLowerCase();
+      final List<LocalWorkerRequest> requests = _memoryWorkerRequests.where((
+        LocalWorkerRequest request,
+      ) {
+        return (cleanStatus == null || request.status == cleanStatus) &&
+            (ownerUid == null || request.ownerUid == ownerUid);
+      }).toList();
+      requests.sort((LocalWorkerRequest a, LocalWorkerRequest b) {
+        return b.createdAt.compareTo(a.createdAt);
+      });
+      return requests;
+    }
+
+    final Database db = await _database;
+    final List<String> whereParts = <String>[];
+    final List<Object> whereArgs = <Object>[];
+    if (status != null && status.trim().isNotEmpty) {
+      whereParts.add('status = ?');
+      whereArgs.add(status.trim().toLowerCase());
+    }
+    if (ownerUid != null && ownerUid.trim().isNotEmpty) {
+      whereParts.add('owner_uid = ?');
+      whereArgs.add(ownerUid.trim());
+    }
+    final List<Map<String, Object?>> rows = await db.query(
+      'worker_requests',
+      where: whereParts.isEmpty ? null : whereParts.join(' AND '),
+      whereArgs: whereArgs.isEmpty ? null : whereArgs,
+      orderBy: 'created_at DESC, id DESC',
+    );
+    return rows.map(LocalWorkerRequest.fromMap).toList();
+  }
+
+  Future<List<Map<String, Object?>>> getWorkerRequestSyncPayloads({
+    required String ownerUid,
+  }) async {
+    final List<LocalWorkerRequest> requests;
+    if (_memory) {
+      requests = _memoryWorkerRequests
+          .where(
+            (LocalWorkerRequest request) =>
+                request.ownerUid == ownerUid && !request.synced,
+          )
+          .toList();
+    } else {
+      final Database db = await _database;
+      final List<Map<String, Object?>> rows = await db.query(
+        'worker_requests',
+        where: 'owner_uid = ? AND synced = ?',
+        whereArgs: <Object>[ownerUid, 0],
+        orderBy: 'created_at ASC, id ASC',
+      );
+      requests = rows.map(LocalWorkerRequest.fromMap).toList();
+    }
+    return requests
+        .map((LocalWorkerRequest request) => request.toCloudMap())
+        .toList();
+  }
+
+  Future<void> markWorkerRequestSynced(String requestId) async {
+    if (_memory) {
+      final int index = _memoryWorkerRequests.indexWhere(
+        (LocalWorkerRequest request) => request.requestId == requestId,
+      );
+      if (index >= 0) {
+        final LocalWorkerRequest request = _memoryWorkerRequests[index];
+        _memoryWorkerRequests[index] = LocalWorkerRequest(
+          id: request.id,
+          requestId: request.requestId,
+          type: request.type,
+          status: request.status,
+          ownerUid: request.ownerUid,
+          workerUid: request.workerUid,
+          workerName: request.workerName,
+          saleCloudId: request.saleCloudId,
+          originalPayload: request.originalPayload,
+          requestedPayload: request.requestedPayload,
+          createdAt: request.createdAt,
+          reviewedAt: request.reviewedAt,
+          synced: true,
+        );
+      }
+      return;
+    }
+
+    final Database db = await _database;
+    await db.update(
+      'worker_requests',
+      <String, Object?>{'synced': 1},
+      where: 'request_id = ?',
+      whereArgs: <Object>[requestId],
+    );
+  }
+
+  Future<void> updateWorkerRequestStatus({
+    required String requestId,
+    required String status,
+    DateTime? reviewedAt,
+  }) async {
+    final String cleanStatus = status.trim().toLowerCase();
+    if (cleanStatus.isEmpty) {
+      return;
+    }
+    final DateTime effectiveReviewedAt = reviewedAt ?? DateTime.now();
+    if (_memory) {
+      final int index = _memoryWorkerRequests.indexWhere(
+        (LocalWorkerRequest request) => request.requestId == requestId,
+      );
+      if (index >= 0) {
+        final LocalWorkerRequest request = _memoryWorkerRequests[index];
+        _memoryWorkerRequests[index] = LocalWorkerRequest(
+          id: request.id,
+          requestId: request.requestId,
+          type: request.type,
+          status: cleanStatus,
+          ownerUid: request.ownerUid,
+          workerUid: request.workerUid,
+          workerName: request.workerName,
+          saleCloudId: request.saleCloudId,
+          originalPayload: request.originalPayload,
+          requestedPayload: request.requestedPayload,
+          createdAt: request.createdAt,
+          reviewedAt: effectiveReviewedAt,
+          synced: false,
+        );
+      }
+      return;
+    }
+
+    final Database db = await _database;
+    await db.update(
+      'worker_requests',
+      <String, Object?>{
+        'status': cleanStatus,
+        'reviewed_at': effectiveReviewedAt.toIso8601String(),
+        'synced': 0,
+      },
+      where: 'request_id = ?',
+      whereArgs: <Object>[requestId],
+    );
+  }
+
   int? _intValue(Object? value) {
     if (value is int) {
       return value;
@@ -1093,6 +1632,13 @@ class AppDatabase {
       return int.tryParse(value);
     }
     return null;
+  }
+
+  Map<String, Object?> _mapValue(Object? value) {
+    if (value is Map) {
+      return Map<String, Object?>.from(value);
+    }
+    return <String, Object?>{};
   }
 
   Future<void> enqueueSync({

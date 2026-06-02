@@ -41,3 +41,4 @@ class DefaultFirebaseOptions {
     appId: '1:877154452010:android:715d1884b3b8d0c9573953',
   );
 }
+

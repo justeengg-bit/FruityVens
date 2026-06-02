@@ -4,12 +4,22 @@ import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
 
+import '../data/app_database.dart';
+
 class FirebaseAccount {
-  const FirebaseAccount({required this.uid, required this.email, this.name});
+  const FirebaseAccount({
+    required this.uid,
+    required this.email,
+    this.name,
+    this.role = AccountRole.owner,
+    this.ownerUid,
+  });
 
   final String uid;
   final String email;
   final String? name;
+  final AccountRole role;
+  final String? ownerUid;
 }
 
 class FirebaseSyncService {
@@ -56,8 +66,18 @@ class FirebaseSyncService {
         throw const FirebaseSyncException('Firebase account was not created.');
       }
       await user.updateDisplayName(name);
-      await _saveUserProfileBestEffort(uid: user.uid, name: name, email: email);
-      return FirebaseAccount(uid: user.uid, email: email, name: name);
+      await _saveUserProfileBestEffort(
+        uid: user.uid,
+        name: name,
+        email: email,
+        role: AccountRole.owner,
+      );
+      return FirebaseAccount(
+        uid: user.uid,
+        email: email,
+        name: name,
+        role: AccountRole.owner,
+      );
     } on auth.FirebaseAuthException catch (error) {
       throw FirebaseSyncException(_authMessage(error));
     } on FirebaseException catch (error) {
@@ -81,15 +101,27 @@ class FirebaseSyncService {
       if (user == null) {
         throw const FirebaseSyncException('Firebase sign-in did not complete.');
       }
+      final Map<String, Object?> workerLink = await _workerLinkForUid(user.uid);
+      final String? ownerUid = workerLink['ownerUid'] as String?;
+      final AccountRole role = ownerUid == null || ownerUid.isEmpty
+          ? AccountRole.owner
+          : AccountRole.worker;
+      final String displayName = role == AccountRole.worker
+          ? 'Worker'
+          : user.displayName ?? email.split('@').first;
       await _saveUserProfileBestEffort(
         uid: user.uid,
-        name: user.displayName ?? email.split('@').first,
+        name: displayName,
         email: email,
+        role: role,
+        ownerUid: ownerUid,
       );
       return FirebaseAccount(
         uid: user.uid,
         email: email,
-        name: user.displayName,
+        name: displayName,
+        role: role,
+        ownerUid: ownerUid,
       );
     } on auth.FirebaseAuthException catch (error) {
       throw FirebaseSyncException(_authMessage(error));
@@ -120,8 +152,18 @@ class FirebaseSyncService {
       final String email = user.email ?? fallbackEmail;
       final String name =
           user.displayName ?? fallbackName ?? email.split('@').first;
-      await _saveUserProfileBestEffort(uid: user.uid, name: name, email: email);
-      return FirebaseAccount(uid: user.uid, email: email, name: name);
+      await _saveUserProfileBestEffort(
+        uid: user.uid,
+        name: name,
+        email: email,
+        role: AccountRole.owner,
+      );
+      return FirebaseAccount(
+        uid: user.uid,
+        email: email,
+        name: name,
+        role: AccountRole.owner,
+      );
     } on auth.FirebaseAuthException catch (error) {
       throw FirebaseSyncException(_authMessage(error));
     } on FirebaseException catch (error) {
@@ -150,6 +192,8 @@ class FirebaseSyncService {
     required String uid,
     required String name,
     required String email,
+    AccountRole role = AccountRole.owner,
+    String? ownerUid,
   }) async {
     final FirebaseDatabase? database = _database;
     if (database == null) {
@@ -159,6 +203,8 @@ class FirebaseSyncService {
     await database.ref('users/$uid/profile').update(<String, Object?>{
       'name': name,
       'email': email,
+      'role': role.name,
+      if (ownerUid != null && ownerUid.isNotEmpty) 'ownerUid': ownerUid,
       'updatedAt': ServerValue.timestamp,
     });
   }
@@ -167,13 +213,95 @@ class FirebaseSyncService {
     required String uid,
     required String name,
     required String email,
+    AccountRole role = AccountRole.owner,
+    String? ownerUid,
   }) async {
     try {
-      await saveUserProfile(uid: uid, name: name, email: email);
+      await saveUserProfile(
+        uid: uid,
+        name: name,
+        email: email,
+        role: role,
+        ownerUid: ownerUid,
+      );
     } on FirebaseException catch (error) {
       if (!_isPermissionDenied(error)) {
         rethrow;
       }
+    }
+  }
+
+  Future<FirebaseAccount> createWorkerAccount({
+    required String ownerUid,
+    required String ownerEmail,
+    required String workerEmail,
+    required String password,
+  }) async {
+    final FirebaseDatabase? database = _database;
+    if (!isAvailable || database == null || ownerUid.trim().isEmpty) {
+      throw const FirebaseSyncException(
+        'Firebase is required to create the shared worker login.',
+      );
+    }
+
+    final FirebaseApp primaryApp = Firebase.app();
+    final FirebaseApp workerApp = await Firebase.initializeApp(
+      name: 'workerProvisioning_${DateTime.now().millisecondsSinceEpoch}',
+      options: primaryApp.options,
+    );
+    final auth.FirebaseAuth workerAuth = auth.FirebaseAuth.instanceFor(
+      app: workerApp,
+    );
+    try {
+      final auth.UserCredential credential = await workerAuth
+          .createUserWithEmailAndPassword(
+            email: workerEmail,
+            password: password,
+          );
+      final auth.User? user = credential.user;
+      if (user == null) {
+        throw const FirebaseSyncException(
+          'Firebase worker account was not created.',
+        );
+      }
+      await user.updateDisplayName('Worker');
+      final String workerUid = user.uid;
+      final Map<String, Object?> workerProfile = <String, Object?>{
+        'uid': workerUid,
+        'email': workerEmail,
+        'name': 'Worker',
+        'role': AccountRole.worker.name,
+        'ownerUid': ownerUid,
+        'ownerEmail': ownerEmail,
+        'active': true,
+        'updatedAt': ServerValue.timestamp,
+      };
+      await database.ref().update(<String, Object?>{
+        'users/$ownerUid/workerAccount': workerProfile,
+        'users/$workerUid/profile': workerProfile,
+        'workerLinks/${_databaseKey(workerUid)}': <String, Object?>{
+          'workerUid': workerUid,
+          'workerEmail': workerEmail,
+          'ownerUid': ownerUid,
+          'ownerEmail': ownerEmail,
+          'active': true,
+          'updatedAt': ServerValue.timestamp,
+        },
+      });
+      return FirebaseAccount(
+        uid: workerUid,
+        email: workerEmail,
+        name: 'Worker',
+        role: AccountRole.worker,
+        ownerUid: ownerUid,
+      );
+    } on auth.FirebaseAuthException catch (error) {
+      throw FirebaseSyncException(_authMessage(error));
+    } on FirebaseException catch (error) {
+      throw FirebaseSyncException(_firebaseMessage(error));
+    } finally {
+      await workerAuth.signOut();
+      await workerApp.delete();
     }
   }
 
@@ -223,8 +351,10 @@ class FirebaseSyncService {
     await database.ref().update(updates);
   }
 
-  Future<List<Map<String, Object?>>> fetchTransactions() async {
-    final String? uid = currentUserId;
+  Future<List<Map<String, Object?>>> fetchTransactions({
+    String? ownerUid,
+  }) async {
+    final String? uid = _dataUserId(ownerUid);
     final FirebaseDatabase? database = _database;
     if (uid == null || database == null) {
       return const <Map<String, Object?>>[];
@@ -236,8 +366,8 @@ class FirebaseSyncService {
     return _mapsFromSnapshot(snapshot);
   }
 
-  Future<List<Map<String, Object?>>> fetchInventory() async {
-    final String? uid = currentUserId;
+  Future<List<Map<String, Object?>>> fetchInventory({String? ownerUid}) async {
+    final String? uid = _dataUserId(ownerUid);
     final FirebaseDatabase? database = _database;
     if (uid == null || database == null) {
       return const <Map<String, Object?>>[];
@@ -249,8 +379,8 @@ class FirebaseSyncService {
     return _mapsFromSnapshot(snapshot);
   }
 
-  Stream<List<Map<String, Object?>>> watchTransactions() {
-    final String? uid = currentUserId;
+  Stream<List<Map<String, Object?>>> watchTransactions({String? ownerUid}) {
+    final String? uid = _dataUserId(ownerUid);
     final FirebaseDatabase? database = _database;
     if (uid == null || database == null) {
       return const Stream<List<Map<String, Object?>>>.empty();
@@ -262,8 +392,8 @@ class FirebaseSyncService {
         .map((DatabaseEvent event) => _mapsFromSnapshot(event.snapshot));
   }
 
-  Stream<List<Map<String, Object?>>> watchInventory() {
-    final String? uid = currentUserId;
+  Stream<List<Map<String, Object?>>> watchInventory({String? ownerUid}) {
+    final String? uid = _dataUserId(ownerUid);
     final FirebaseDatabase? database = _database;
     if (uid == null || database == null) {
       return const Stream<List<Map<String, Object?>>>.empty();
@@ -286,6 +416,68 @@ class FirebaseSyncService {
     await database.ref('users/$uid/inventory/${_databaseKey(name)}').set(
       <String, Object?>{...fruit, 'updatedAt': ServerValue.timestamp},
     );
+  }
+
+  Future<void> syncWorkerRequests({
+    required String ownerUid,
+    required List<Map<String, Object?>> requests,
+  }) async {
+    final FirebaseDatabase? database = _database;
+    if (ownerUid.trim().isEmpty || database == null || requests.isEmpty) {
+      return;
+    }
+
+    final Map<String, Object?> updates = <String, Object?>{};
+    for (final Map<String, Object?> request in requests) {
+      final String? requestId = request['requestId'] as String?;
+      if (requestId == null || requestId.isEmpty) {
+        continue;
+      }
+      updates['users/$ownerUid/workerRequests/${_databaseKey(requestId)}'] =
+          <String, Object?>{...request, 'updatedAt': ServerValue.timestamp};
+    }
+    if (updates.isEmpty) {
+      return;
+    }
+    await database.ref().update(updates);
+  }
+
+  Future<void> syncWorkerRequest({
+    required String ownerUid,
+    required Map<String, Object?> request,
+  }) async {
+    await syncWorkerRequests(
+      ownerUid: ownerUid,
+      requests: <Map<String, Object?>>[request],
+    );
+  }
+
+  Future<List<Map<String, Object?>>> fetchWorkerRequests({
+    required String ownerUid,
+  }) async {
+    final FirebaseDatabase? database = _database;
+    if (ownerUid.trim().isEmpty || database == null) {
+      return const <Map<String, Object?>>[];
+    }
+
+    final DataSnapshot snapshot = await database
+        .ref('users/$ownerUid/workerRequests')
+        .get();
+    return _mapsFromSnapshot(snapshot);
+  }
+
+  Stream<List<Map<String, Object?>>> watchWorkerRequests({
+    required String ownerUid,
+  }) {
+    final FirebaseDatabase? database = _database;
+    if (ownerUid.trim().isEmpty || database == null) {
+      return const Stream<List<Map<String, Object?>>>.empty();
+    }
+
+    return database
+        .ref('users/$ownerUid/workerRequests')
+        .onValue
+        .map((DatabaseEvent event) => _mapsFromSnapshot(event.snapshot));
   }
 
   Future<void> removeFruit(String fruitName) async {
@@ -371,6 +563,36 @@ class FirebaseSyncService {
     await database.ref('users/$uid/devices/${_databaseKey(deviceId)}').update(
       <String, Object?>{'active': false, 'signedOutAt': ServerValue.timestamp},
     );
+  }
+
+  Future<Map<String, Object?>> _workerLinkForUid(String uid) async {
+    final FirebaseDatabase? database = _database;
+    if (database == null || uid.isEmpty) {
+      return <String, Object?>{};
+    }
+
+    try {
+      final DataSnapshot snapshot = await database
+          .ref('workerLinks/${_databaseKey(uid)}')
+          .get();
+      final Object? value = snapshot.value;
+      if (value is Map) {
+        return Map<String, Object?>.from(value);
+      }
+    } on FirebaseException catch (error) {
+      if (!_isPermissionDenied(error)) {
+        rethrow;
+      }
+    }
+    return <String, Object?>{};
+  }
+
+  String? _dataUserId(String? ownerUid) {
+    final String? cleanOwnerUid = ownerUid?.trim();
+    if (cleanOwnerUid != null && cleanOwnerUid.isNotEmpty) {
+      return cleanOwnerUid;
+    }
+    return currentUserId;
   }
 
   String _databaseKey(String value) {

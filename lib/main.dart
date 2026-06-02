@@ -146,7 +146,7 @@ enum AppScreen {
 
 enum AnalyticsPeriod { sevenDays, thirtyDays, month, year, allTime }
 
-enum _TransactionHistoryAction { keep, cancel, restore, remove }
+enum _TransactionHistoryAction { edit, keep, cancel, restore, remove }
 
 class _PhoneLinkSetup {
   const _PhoneLinkSetup({required this.pin, required this.useBiometrics});
@@ -174,6 +174,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   static const String _phoneLinkPinKey = 'phone_link_pin_secret';
   static const String _themeModeKey = 'theme_mode';
   static const String _scaleDeviceIdKey = 'scale_device_id';
+  static const String _workerAccountEmailKey = 'worker_account_email';
   static const String _inventoryPriceConfiguredPrefix =
       'inventory_price_configured_';
   static const String _defaultScaleDeviceId = String.fromEnvironment(
@@ -210,6 +211,11 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   final TextEditingController _resetEmailController = TextEditingController();
   final TextEditingController _newPriceController = TextEditingController();
   final TextEditingController _scaleBaseUrlController = TextEditingController();
+  final TextEditingController _workerEmailController = TextEditingController();
+  final TextEditingController _workerPasswordController =
+      TextEditingController();
+  final TextEditingController _workerConfirmController =
+      TextEditingController();
   final Map<String, TextEditingController> _priceInputControllers =
       <String, TextEditingController>{};
   final Map<String, FocusNode> _priceInputFocusNodes = <String, FocusNode>{};
@@ -227,6 +233,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   bool _creatingAccount = false;
   bool _signingOut = false;
   bool _sendingReset = false;
+  bool _creatingWorkerAccount = false;
   bool _resetSent = false;
   bool _forecastGenerating = false;
   bool _exportingReport = false;
@@ -238,16 +245,23 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   bool _emailPasswordProviderBlocked = false;
   bool _isGuestSession = false;
   bool _cloudSyncEnabled = false;
+  AccountRole _selectedLoginRole = AccountRole.owner;
+  AccountRole _sessionRole = AccountRole.owner;
   String? _rememberedAccountEmail;
   String? _phoneLinkAccountEmail;
+  String? _workerAccountEmail;
   String? _cloudSyncStatus;
   String? _sessionEmail;
   String? _sessionPassword;
+  String? _sessionFirebaseUid;
+  String? _sessionOwnerUid;
   String? _deviceId;
   DateTime? _lastBackGestureAt;
   Timer? _cloudSyncTimer;
   StreamSubscription<List<Map<String, Object?>>>? _inventoryLiveSubscription;
   StreamSubscription<List<Map<String, Object?>>>? _transactionsLiveSubscription;
+  StreamSubscription<List<Map<String, Object?>>>?
+  _workerRequestsLiveSubscription;
   String? _liveSyncUserId;
   int _liveSyncGeneration = 0;
   Timer? _scaleLogTimer;
@@ -275,6 +289,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   DateTime? _lastScaleLogSyncAt;
   List<TransactionData> _realTransactionHistory = <TransactionData>[];
   List<LocalPriceChange> _priceChangeHistory = <LocalPriceChange>[];
+  List<LocalWorkerRequest> _workerRequests = <LocalWorkerRequest>[];
   final Set<String> _configuredPriceFruits = <String>{};
   final Set<String> _priceConflictFruits = <String>{};
 
@@ -394,6 +409,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _googleSigningIn ||
       _biometricSigningIn ||
       _creatingAccount ||
+      _creatingWorkerAccount ||
       _signingOut ||
       _sendingReset;
 
@@ -440,6 +456,27 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
   List<TransactionData> get _activeTransactionHistory =>
       _isGuestSession ? _demoTransactionHistory : _realTransactionHistory;
+
+  bool get _isWorkerSession =>
+      _sessionEmail != null &&
+      !_isGuestSession &&
+      _sessionRole == AccountRole.worker;
+
+  bool get _isOwnerSession =>
+      _sessionEmail != null &&
+      !_isGuestSession &&
+      _sessionRole == AccountRole.owner;
+
+  String? get _firebaseDataOwnerUid {
+    if (_isWorkerSession) {
+      return _sessionOwnerUid;
+    }
+    return _firebaseSyncService.currentUserId ?? _sessionFirebaseUid;
+  }
+
+  List<LocalWorkerRequest> get _pendingWorkerRequests => _workerRequests
+      .where((LocalWorkerRequest request) => request.status == 'pending')
+      .toList(growable: false);
 
   List<TransactionData> get _visibleTransactionHistory =>
       _activeTransactionHistory
@@ -584,6 +621,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     _loadInventoryFromDatabase();
     _loadTransactionsFromDatabase();
     _loadPriceHistoryFromDatabase();
+    _loadWorkerRequestsFromDatabase();
     _startCloudSyncMonitor();
     if (widget.database == null) {
       _startSplash();
@@ -604,6 +642,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     _resetEmailController.dispose();
     _newPriceController.dispose();
     _scaleBaseUrlController.dispose();
+    _workerEmailController.dispose();
+    _workerPasswordController.dispose();
+    _workerConfirmController.dispose();
     for (final TextEditingController controller
         in _priceInputControllers.values) {
       controller.dispose();
@@ -653,13 +694,19 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
   void _startFirebaseLiveSync() {
     final String? uid = _firebaseSyncService.currentUserId;
-    if (!_cloudSyncEnabled || _isGuestSession || uid == null) {
+    final String? dataOwnerUid = _firebaseDataOwnerUid;
+    if (!_cloudSyncEnabled ||
+        _isGuestSession ||
+        uid == null ||
+        dataOwnerUid == null ||
+        dataOwnerUid.isEmpty) {
       _stopFirebaseLiveSync();
       return;
     }
     if (_liveSyncUserId == uid &&
         _inventoryLiveSubscription != null &&
-        _transactionsLiveSubscription != null) {
+        _transactionsLiveSubscription != null &&
+        _workerRequestsLiveSubscription != null) {
       return;
     }
 
@@ -667,30 +714,32 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     _liveSyncGeneration += 1;
     final int generation = _liveSyncGeneration;
     _liveSyncUserId = uid;
-    _inventoryLiveSubscription = _firebaseSyncService.watchInventory().listen(
-      (List<Map<String, Object?>> inventory) {
-        unawaited(
-          _applyCloudInventoryFromFirebase(
-            inventory,
-            fromLiveSync: true,
-            liveSyncUserId: uid,
-            liveSyncGeneration: generation,
-          ),
+    _inventoryLiveSubscription = _firebaseSyncService
+        .watchInventory(ownerUid: dataOwnerUid)
+        .listen(
+          (List<Map<String, Object?>> inventory) {
+            unawaited(
+              _applyCloudInventoryFromFirebase(
+                inventory,
+                fromLiveSync: true,
+                liveSyncUserId: uid,
+                liveSyncGeneration: generation,
+              ),
+            );
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            if (!_isLiveSyncCurrent(uid, generation)) {
+              return;
+            }
+            _handleFirebaseLiveSyncError(
+              'Inventory live sync failed',
+              error,
+              stackTrace,
+            );
+          },
         );
-      },
-      onError: (Object error, StackTrace stackTrace) {
-        if (!_isLiveSyncCurrent(uid, generation)) {
-          return;
-        }
-        _handleFirebaseLiveSyncError(
-          'Inventory live sync failed',
-          error,
-          stackTrace,
-        );
-      },
-    );
     _transactionsLiveSubscription = _firebaseSyncService
-        .watchTransactions()
+        .watchTransactions(ownerUid: dataOwnerUid)
         .listen(
           (List<Map<String, Object?>> transactions) {
             unawaited(
@@ -713,6 +762,30 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             );
           },
         );
+    _workerRequestsLiveSubscription = _firebaseSyncService
+        .watchWorkerRequests(ownerUid: dataOwnerUid)
+        .listen(
+          (List<Map<String, Object?>> requests) {
+            unawaited(
+              _applyCloudWorkerRequestsFromFirebase(
+                requests,
+                fromLiveSync: true,
+                liveSyncUserId: uid,
+                liveSyncGeneration: generation,
+              ),
+            );
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            if (!_isLiveSyncCurrent(uid, generation)) {
+              return;
+            }
+            _handleFirebaseLiveSyncError(
+              'Worker request live sync failed',
+              error,
+              stackTrace,
+            );
+          },
+        );
   }
 
   void _stopFirebaseLiveSync() {
@@ -722,13 +795,19 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         _inventoryLiveSubscription;
     final StreamSubscription<List<Map<String, Object?>>>? transactions =
         _transactionsLiveSubscription;
+    final StreamSubscription<List<Map<String, Object?>>>? workerRequests =
+        _workerRequestsLiveSubscription;
     _inventoryLiveSubscription = null;
     _transactionsLiveSubscription = null;
+    _workerRequestsLiveSubscription = null;
     if (inventory != null) {
       unawaited(inventory.cancel());
     }
     if (transactions != null) {
       unawaited(transactions.cancel());
+    }
+    if (workerRequests != null) {
+      unawaited(workerRequests.cancel());
     }
   }
 
@@ -956,6 +1035,16 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     if (await _database.saleExistsByCloudId(cloudId)) {
       return false;
     }
+    if (_isWorkerSession) {
+      final List<LocalWorkerRequest> existingRequests = await _database
+          .getWorkerRequests(ownerUid: _sessionOwnerUid);
+      final bool alreadyRequested = existingRequests.any(
+        (LocalWorkerRequest request) => request.saleCloudId == cloudId,
+      );
+      if (alreadyRequested) {
+        return false;
+      }
+    }
     final int unitPrice = log.pricePerKgCentavos > 0
         ? log.pricePerKgCentavos
         : (_inventorySavedPrice(log.fruitName) ??
@@ -963,6 +1052,24 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     final int totalPrice = log.priceCentavos > 0
         ? log.priceCentavos
         : ((unitPrice * log.weightGrams) / 1000).round();
+    if (_isWorkerSession) {
+      final Map<String, Object?> requestedPayload = <String, Object?>{
+        'cloudId': cloudId,
+        'fruitName': log.fruitName,
+        'weightGrams': math.max(0, log.weightGrams),
+        'unitPrice': math.max(0, unitPrice),
+        'totalPrice': math.max(0, totalPrice),
+        'soldAt': log.soldAt.toIso8601String(),
+        'status': 'sold',
+      };
+      await _submitWorkerRequest(
+        type: 'create_sale',
+        saleCloudId: cloudId,
+        requestedPayload: requestedPayload,
+        showToast: false,
+      );
+      return true;
+    }
     await _database.addSale(
       cloudId: cloudId,
       fruitName: log.fruitName,
@@ -1020,13 +1127,25 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           name: cloudAccount.name ?? email.split('@').first,
           email: email,
           password: password,
+          role: cloudAccount.role,
+          ownerUid: cloudAccount.ownerUid,
+          firebaseUid: cloudAccount.uid,
         );
+        if (mounted) {
+          setState(() {
+            _sessionRole = cloudAccount.role;
+            _sessionFirebaseUid = cloudAccount.uid;
+            _sessionOwnerUid = cloudAccount.ownerUid;
+          });
+        }
       }
       await _registerCurrentDeviceWithFirebase();
       await _pullInventoryFromFirebase();
       await _syncInventoryToFirebase();
+      await _syncWorkerRequestsToFirebase();
       await _syncTransactionsToFirebase();
       await _pullTransactionsFromFirebase();
+      await _pullWorkerRequestsFromFirebase();
       _startFirebaseLiveSync();
       if (!mounted) {
         return;
@@ -1072,6 +1191,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   Future<void> _refreshCurrentScreen() async {
     await _loadInventoryFromDatabase();
     await _loadTransactionsFromDatabase();
+    await _loadWorkerRequestsFromDatabase();
     if (!mounted || !_screenSupportsPullRefresh) {
       return;
     }
@@ -1293,6 +1413,19 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     });
   }
 
+  Future<void> _loadWorkerRequestsFromDatabase() async {
+    final String? ownerUid = _firebaseDataOwnerUid;
+    final List<LocalWorkerRequest> requests = await _database.getWorkerRequests(
+      ownerUid: ownerUid,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _workerRequests = requests;
+    });
+  }
+
   DashboardStats _dashboardStats() {
     final DateTime now = DateTime.now();
     final List<TransactionData> soldTransactions = _activeTransactionHistory
@@ -1473,6 +1606,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     final String? walkthroughSetting = await _database.getSetting(
       _walkthroughSeenKey,
     );
+    final String? workerEmailSetting = await _database.getSetting(
+      _workerAccountEmailKey,
+    );
+    final String? workerEmail =
+        workerEmailSetting == null || workerEmailSetting.isEmpty
+        ? null
+        : workerEmailSetting;
     final bool hasUsablePhoneLink =
         phoneLinkSetting == 'true' && phoneLinkEmail != null;
     final bool shouldShowWalkthrough =
@@ -1486,6 +1626,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     setState(() {
       _rememberedAccountEmail = rememberedEmail;
       _phoneLinkAccountEmail = phoneLinkEmail;
+      _workerAccountEmail = workerEmail;
       _biometricAutoLoginEnabled =
           biometricSetting == 'true' && hasUsablePhoneLink;
       _phoneLinkEnabled = hasUsablePhoneLink;
@@ -1596,7 +1737,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   }
 
   Future<void> _syncInventoryToFirebase() async {
-    if (!_cloudSyncEnabled || _isGuestSession) {
+    if (!_cloudSyncEnabled || _isGuestSession || _isWorkerSession) {
       return;
     }
     final List<String> syncableFruits = _managedFruits
@@ -1654,7 +1795,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   }
 
   Future<void> _syncTransactionsToFirebase() async {
-    if (!_cloudSyncEnabled || _isGuestSession) {
+    if (!_cloudSyncEnabled || _isGuestSession || _isWorkerSession) {
       return;
     }
     final String deviceId = _deviceId ?? await _loadDeviceId();
@@ -1669,12 +1810,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   Future<void> _pullInventoryFromFirebase() async {
     if (_isGuestSession ||
         !_cloudSyncEnabled ||
-        _firebaseSyncService.currentUserId == null) {
+        _firebaseSyncService.currentUserId == null ||
+        _firebaseDataOwnerUid == null) {
       return;
     }
 
     final List<Map<String, Object?>> cloudInventory = await _firebaseSyncService
-        .fetchInventory();
+        .fetchInventory(ownerUid: _firebaseDataOwnerUid);
     await _applyCloudInventoryFromFirebase(cloudInventory);
   }
 
@@ -1771,12 +1913,15 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   Future<void> _pullTransactionsFromFirebase() async {
     if (_isGuestSession ||
         !_cloudSyncEnabled ||
-        _firebaseSyncService.currentUserId == null) {
+        _firebaseSyncService.currentUserId == null ||
+        _firebaseDataOwnerUid == null) {
       return;
     }
 
     final List<Map<String, Object?>> cloudTransactions =
-        await _firebaseSyncService.fetchTransactions();
+        await _firebaseSyncService.fetchTransactions(
+          ownerUid: _firebaseDataOwnerUid,
+        );
     await _applyCloudTransactionsFromFirebase(cloudTransactions);
   }
 
@@ -1801,6 +1946,80 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       return;
     }
     await _loadTransactionsFromDatabase();
+    if (mounted &&
+        fromLiveSync &&
+        _canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration)) {
+      setState(() {
+        _emailPasswordProviderBlocked = false;
+        _cloudSyncStatus = _priceConflictFruits.isEmpty
+            ? 'Synced with Firebase'
+            : 'Price conflict needs review';
+      });
+    }
+  }
+
+  Future<void> _syncWorkerRequestsToFirebase() async {
+    final String? ownerUid = _firebaseDataOwnerUid;
+    if (!_cloudSyncEnabled ||
+        _isGuestSession ||
+        ownerUid == null ||
+        ownerUid.isEmpty) {
+      return;
+    }
+    final List<Map<String, Object?>> requests = await _database
+        .getWorkerRequestSyncPayloads(ownerUid: ownerUid);
+    if (requests.isEmpty) {
+      return;
+    }
+    await _firebaseSyncService.syncWorkerRequests(
+      ownerUid: ownerUid,
+      requests: requests,
+    );
+    for (final Map<String, Object?> request in requests) {
+      final String? requestId = request['requestId'] as String?;
+      if (requestId != null && requestId.isNotEmpty) {
+        await _database.markWorkerRequestSynced(requestId);
+      }
+    }
+    await _loadWorkerRequestsFromDatabase();
+  }
+
+  Future<void> _pullWorkerRequestsFromFirebase() async {
+    final String? ownerUid = _firebaseDataOwnerUid;
+    if (_isGuestSession ||
+        !_cloudSyncEnabled ||
+        _firebaseSyncService.currentUserId == null ||
+        ownerUid == null ||
+        ownerUid.isEmpty) {
+      return;
+    }
+
+    final List<Map<String, Object?>> cloudRequests = await _firebaseSyncService
+        .fetchWorkerRequests(ownerUid: ownerUid);
+    await _applyCloudWorkerRequestsFromFirebase(cloudRequests);
+  }
+
+  Future<void> _applyCloudWorkerRequestsFromFirebase(
+    List<Map<String, Object?>> cloudRequests, {
+    bool fromLiveSync = false,
+    String? liveSyncUserId,
+    int? liveSyncGeneration,
+  }) async {
+    if (!_canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration) ||
+        _isGuestSession ||
+        cloudRequests.isEmpty) {
+      return;
+    }
+    for (final Map<String, Object?> request in cloudRequests) {
+      if (!_canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration)) {
+        return;
+      }
+      await _database.saveWorkerRequestFromCloud(request);
+    }
+    if (!_canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration)) {
+      return;
+    }
+    await _loadWorkerRequestsFromDatabase();
     if (mounted &&
         fromLiveSync &&
         _canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration)) {
@@ -2038,7 +2257,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   }
 
   Future<void> _syncFruitToFirebase(String fruit) async {
-    if (!_cloudSyncEnabled || _isGuestSession) {
+    if (!_cloudSyncEnabled || _isGuestSession || _isWorkerSession) {
       return;
     }
     if (_priceConflictFruits.contains(fruit)) {
@@ -2106,6 +2325,15 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
   void _show(AppScreen screen) {
     fruityVensMessengerKey.currentState?.hideCurrentSnackBar();
+    if (_isWorkerSession &&
+        (screen == AppScreen.forecast ||
+            screen == AppScreen.analytics ||
+            screen == AppScreen.inventoryManage)) {
+      _toast('Owner access required.');
+      screen = screen == AppScreen.inventoryManage
+          ? AppScreen.inventory
+          : AppScreen.dashboard;
+    }
     setState(() {
       _screen = screen;
       _operationsOpen = false;
@@ -2227,9 +2455,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           : 'Offline mode';
       _sessionEmail = null;
       _sessionPassword = null;
+      _sessionFirebaseUid = null;
+      _sessionOwnerUid = null;
+      _sessionRole = AccountRole.owner;
       _operationsOpen = false;
       _biometricUnlockPromptDismissed = true;
       _screen = AppScreen.login;
+      _workerRequests = <LocalWorkerRequest>[];
     });
     await _signOutCloudBestEffort(deviceId);
     if (!mounted) {
@@ -2315,6 +2547,17 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     }
 
     if (localAccount != null) {
+      if (localAccount.role != _selectedLoginRole) {
+        setState(() {
+          _signingIn = false;
+        });
+        _toast(
+          localAccount.role == AccountRole.worker
+              ? 'Use Worker mode for this shared login.'
+              : 'Use Owner mode for this account.',
+        );
+        return;
+      }
       if (localAccount.password != password) {
         setState(() {
           _signingIn = false;
@@ -2333,6 +2576,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         _cloudSyncStatus = 'Offline account';
         _sessionEmail = username;
         _sessionPassword = password;
+        _sessionRole = localAccount.role;
+        _sessionFirebaseUid = localAccount.firebaseUid;
+        _sessionOwnerUid = localAccount.ownerUid;
         _screen = AppScreen.dashboard;
       });
       unawaited(_refreshCloudSessionForLocalAccount(username, password));
@@ -2373,13 +2619,32 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       );
       return;
     } else {
+      if (cloudAccount.role != _selectedLoginRole) {
+        await _firebaseSyncService.signOut();
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _signingIn = false;
+        });
+        _toast(
+          cloudAccount.role == AccountRole.worker
+              ? 'Use Worker mode for this shared login.'
+              : 'Use Owner mode for this account.',
+        );
+        return;
+      }
       await _database.saveAccount(
         name: cloudAccount.name ?? username.split('@').first,
         email: username,
         password: password,
+        role: cloudAccount.role,
+        ownerUid: cloudAccount.ownerUid,
+        firebaseUid: cloudAccount.uid,
       );
     }
 
+    final FirebaseAccount signedInCloudAccount = cloudAccount;
     await _rememberAccountIfNeeded(username);
     if (!mounted) {
       return;
@@ -2390,13 +2655,12 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _emailPasswordProviderBlocked =
           cloudError != null &&
           _isEmailPasswordProviderDisabledMessage(cloudError);
-      _cloudSyncStatus = cloudAccount == null
-          ? (cloudError == null
-                ? 'Offline account'
-                : _cloudStatusForSyncError(cloudError))
-          : 'Signed in with Firebase';
+      _cloudSyncStatus = 'Signed in with Firebase';
       _sessionEmail = username;
       _sessionPassword = password;
+      _sessionRole = signedInCloudAccount.role;
+      _sessionFirebaseUid = signedInCloudAccount.uid;
+      _sessionOwnerUid = signedInCloudAccount.ownerUid;
       _screen = AppScreen.dashboard;
     });
     await _syncWhenInternetReturns();
@@ -2431,19 +2695,27 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         name: cloudAccount.name ?? email.split('@').first,
         email: email,
         password: password,
+        role: cloudAccount.role,
+        ownerUid: cloudAccount.ownerUid,
+        firebaseUid: cloudAccount.uid,
       );
       if (!mounted) {
         return;
       }
       setState(() {
         _emailPasswordProviderBlocked = false;
+        _sessionRole = cloudAccount.role;
+        _sessionFirebaseUid = cloudAccount.uid;
+        _sessionOwnerUid = cloudAccount.ownerUid;
         _cloudSyncStatus = 'Synced with Firebase';
       });
       await _registerCurrentDeviceWithFirebase();
       await _pullInventoryFromFirebase();
       await _syncInventoryToFirebase();
+      await _syncWorkerRequestsToFirebase();
       await _syncTransactionsToFirebase();
       await _pullTransactionsFromFirebase();
+      await _pullWorkerRequestsFromFirebase();
       _startFirebaseLiveSync();
     } on FirebaseSyncException catch (error, stackTrace) {
       _logCloudSyncIssue(
@@ -2488,6 +2760,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _usernameController.text = account.email;
       _sessionEmail = account.email;
       _sessionPassword = account.password;
+      _sessionRole = account.role;
+      _sessionFirebaseUid = account.firebaseUid;
+      _sessionOwnerUid = account.ownerUid;
       _rememberedAccountEmail = account.email;
       _phoneLinkAccountEmail = account.email;
       _biometricUnlockPromptDismissed = true;
@@ -3097,6 +3372,12 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     unawaited(_database.saveSetting(_walkthroughSeenKey, 'true'));
     setState(() {
       _isGuestSession = true;
+      _sessionEmail = null;
+      _sessionPassword = null;
+      _sessionFirebaseUid = null;
+      _sessionOwnerUid = null;
+      _sessionRole = AccountRole.owner;
+      _workerRequests = <LocalWorkerRequest>[];
       _biometricUnlockPromptDismissed = true;
       _screen = AppScreen.dashboard;
       _walkthroughPage = 0;
@@ -3117,6 +3398,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
   Future<void> _signInWithGoogle() async {
     if (_authBusy) {
+      return;
+    }
+    if (_selectedLoginRole == AccountRole.worker) {
+      _toast('Use the shared Worker email and password.');
       return;
     }
 
@@ -3236,6 +3521,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         name: accountName,
         email: email,
         password: offlinePassword,
+        role: AccountRole.owner,
+        firebaseUid: cloudAccount?.uid,
       );
       account = await _database.getAccountByEmail(email);
       if (!mounted) {
@@ -3257,6 +3544,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _usernameController.text = email;
       _sessionEmail = email;
       _sessionPassword = account?.password;
+      _sessionRole = AccountRole.owner;
+      _sessionFirebaseUid = cloudAccount?.uid;
+      _sessionOwnerUid = null;
       _screen = AppScreen.dashboard;
     });
     await _syncWhenInternetReturns();
@@ -3489,7 +3779,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       cloudError = error.message;
     }
 
-    await _database.saveAccount(name: name, email: email, password: password);
+    await _database.saveAccount(
+      name: name,
+      email: email,
+      password: password,
+      role: AccountRole.owner,
+      firebaseUid: cloudAccount?.uid,
+    );
     if (!mounted) {
       return;
     }
@@ -3514,6 +3810,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _passwordController.text = password;
       _sessionEmail = email;
       _sessionPassword = password;
+      _sessionRole = AccountRole.owner;
+      _sessionFirebaseUid = cloudAccount?.uid;
+      _sessionOwnerUid = null;
       _screen = AppScreen.dashboard;
     });
     await _syncWhenInternetReturns();
@@ -4488,11 +4787,12 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       title: 'Inventory',
       onBack: () => _show(AppScreen.dashboard),
       trailing: <Widget>[
-        _topBarIconButton(
-          tooltip: 'Manage fruits',
-          icon: Icons.tune_rounded,
-          onPressed: () => _show(AppScreen.inventoryManage),
-        ),
+        if (!_isWorkerSession)
+          _topBarIconButton(
+            tooltip: 'Manage fruits',
+            icon: Icons.tune_rounded,
+            onPressed: () => _show(AppScreen.inventoryManage),
+          ),
       ],
     );
   }
@@ -4818,9 +5118,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       ),
                     ),
                     SizedBox(height: 18),
+                    _loginRoleSelector(),
+                    SizedBox(height: 14),
                     AppTextField(
                       controller: _usernameController,
-                      label: 'Vendor or student email',
+                      label: _selectedLoginRole == AccountRole.worker
+                          ? 'Shared worker email'
+                          : 'Vendor or student email',
                       hint: 'name@phinmaed.com',
                       keyboardType: TextInputType.emailAddress,
                       prefixIcon: Icons.alternate_email_rounded,
@@ -4896,13 +5200,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       busy: _signingIn,
                     ),
                     SizedBox(height: 10),
-                    GoogleSignInButton(
-                      label: _googleSigningIn
-                          ? 'Connecting Google'
-                          : 'Continue with Google',
-                      onPressed: _authBusy ? null : _signInWithGoogle,
-                      busy: _googleSigningIn,
-                    ),
+                    if (_selectedLoginRole == AccountRole.owner)
+                      GoogleSignInButton(
+                        label: _googleSigningIn
+                            ? 'Connecting Google'
+                            : 'Continue with Google',
+                        onPressed: _authBusy ? null : _signInWithGoogle,
+                        busy: _googleSigningIn,
+                      ),
                     SizedBox(height: 12),
                     Row(
                       children: <Widget>[
@@ -4937,29 +5242,33 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                         ),
                       ),
                     ],
-                    SizedBox(height: 14),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: <Widget>[
-                        Flexible(
-                          child: Text(
-                            "Don't have an account?",
-                            style: TextStyle(
-                              color: AppColors.textSecondary,
-                              fontSize: 12,
+                    if (_selectedLoginRole == AccountRole.owner) ...<Widget>[
+                      SizedBox(height: 14),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: <Widget>[
+                          Flexible(
+                            child: Text(
+                              "Don't have an account?",
+                              style: TextStyle(
+                                color: AppColors.textSecondary,
+                                fontSize: 12,
+                              ),
                             ),
                           ),
-                        ),
-                        TextButton(
-                          onPressed: () => _show(AppScreen.createAccount),
-                          style: TextButton.styleFrom(
-                            foregroundColor: AppColors.orangeText,
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                          TextButton(
+                            onPressed: () => _show(AppScreen.createAccount),
+                            style: TextButton.styleFrom(
+                              foregroundColor: AppColors.orangeText,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                              ),
+                            ),
+                            child: Text('Create account'),
                           ),
-                          child: Text('Create account'),
-                        ),
-                      ],
-                    ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -4972,6 +5281,82 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _loginRoleSelector() {
+    Widget roleButton({
+      required AccountRole role,
+      required IconData icon,
+      required String label,
+    }) {
+      final bool selected = _selectedLoginRole == role;
+      return Expanded(
+        child: Material(
+          color: selected ? AppColors.orangeDim : AppColors.bgSurface,
+          borderRadius: BorderRadius.circular(8),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: _authBusy
+                ? null
+                : () {
+                    setState(() {
+                      _selectedLoginRole = role;
+                    });
+                  },
+            child: Container(
+              height: 42,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: selected ? AppColors.orange : AppColors.borderSoft,
+                  width: selected ? 1 : 0.5,
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: <Widget>[
+                  Icon(
+                    icon,
+                    size: 17,
+                    color: selected
+                        ? AppColors.orangeText
+                        : AppColors.textSecondary,
+                  ),
+                  SizedBox(width: 6),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: selected
+                          ? AppColors.textPrimary
+                          : AppColors.textSecondary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      children: <Widget>[
+        roleButton(
+          role: AccountRole.owner,
+          icon: Icons.admin_panel_settings_rounded,
+          label: 'Owner',
+        ),
+        SizedBox(width: 8),
+        roleButton(
+          role: AccountRole.worker,
+          icon: Icons.badge_rounded,
+          label: 'Worker',
+        ),
+      ],
     );
   }
 
@@ -5281,6 +5666,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           _guestAccessBanner(),
           SizedBox(height: 12),
         ],
+        if (_isOwnerSession && _pendingWorkerRequests.isNotEmpty) ...<Widget>[
+          _ownerWorkerRequestsPanel(),
+          SizedBox(height: 12),
+        ],
+        if (_isWorkerSession && _workerRequests.isNotEmpty) ...<Widget>[
+          _workerRequestStatusPanel(),
+          SizedBox(height: 12),
+        ],
         _recentTransactionsPreview(),
       ],
     );
@@ -5388,6 +5781,226 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     );
   }
 
+  Widget _ownerWorkerRequestsPanel() {
+    final List<LocalWorkerRequest> requests = _pendingWorkerRequests;
+    return AppCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: AppColors.orange.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  Icons.pending_actions_rounded,
+                  color: AppColors.orangeText,
+                  size: 20,
+                ),
+              ),
+              SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      'Worker approvals',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      'Review pending worker changes before they affect sales.',
+                      style: TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 12,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              StatusBadge.orange('${requests.length} pending'),
+            ],
+          ),
+          SizedBox(height: 10),
+          ...requests.take(4).map(_ownerWorkerRequestRow),
+        ],
+      ),
+    );
+  }
+
+  Widget _ownerWorkerRequestRow(LocalWorkerRequest request) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 9),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: AppColors.borderSoft, width: 0.5),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      _workerRequestTitle(request),
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      _workerRequestDetail(request),
+                      style: TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 11,
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(width: 8),
+              Text(
+                _shortDateTime(request.createdAt),
+                style: TextStyle(color: AppColors.textMuted, fontSize: 10),
+              ),
+            ],
+          ),
+          SizedBox(height: 8),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: GhostButton(
+                  label: 'Deny',
+                  icon: Icons.close_rounded,
+                  onPressed: () =>
+                      unawaited(_reviewWorkerRequest(request, approved: false)),
+                ),
+              ),
+              SizedBox(width: 8),
+              Expanded(
+                child: PrimaryButton(
+                  label: 'Approve',
+                  icon: Icons.check_rounded,
+                  onPressed: () =>
+                      unawaited(_reviewWorkerRequest(request, approved: true)),
+                  expanded: true,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _workerRequestStatusPanel() {
+    return AppCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Expanded(child: SectionTitle('Request status')),
+              StatusBadge.blue('${_workerRequests.length} total'),
+            ],
+          ),
+          SizedBox(height: 8),
+          ..._workerRequests.take(4).map((LocalWorkerRequest request) {
+            return Container(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(color: AppColors.borderSoft, width: 0.5),
+                ),
+              ),
+              child: Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          _workerRequestTitle(request),
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        SizedBox(height: 2),
+                        Text(
+                          _workerRequestDetail(request),
+                          style: TextStyle(
+                            color: AppColors.textSecondary,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  SizedBox(width: 8),
+                  _workerRequestStatusBadge(request.status),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _workerRequestStatusBadge(String status) {
+    return switch (status) {
+      'approved' => StatusBadge.green('APPROVED'),
+      'denied' => StatusBadge.red('DENIED'),
+      _ => StatusBadge.orange('PENDING'),
+    };
+  }
+
+  String _workerRequestTitle(LocalWorkerRequest request) {
+    return switch (request.type) {
+      'create_sale' => 'Create sale',
+      'edit_sale' => 'Edit sale',
+      'cancel_sale' => 'Cancel sale',
+      'restore_sale' => 'Restore sale',
+      'remove_sale' => 'Remove sale',
+      'keep_sale' => 'Keep sale',
+      _ => 'Worker request',
+    };
+  }
+
+  String _workerRequestDetail(LocalWorkerRequest request) {
+    final Map<String, Object?> payload = request.requestedData;
+    final String fruit = payload['fruitName'] as String? ?? 'Sale';
+    final int? weightGrams = _intFromCloud(payload['weightGrams']);
+    final int? totalPrice = _intFromCloud(payload['totalPrice']);
+    final String status = _displayStatus(payload['status'] as String? ?? '');
+    final String weight = weightGrams == null ? '' : _formatWeight(weightGrams);
+    final String price = totalPrice == null ? '' : money(totalPrice);
+    return <String>[
+      fruit,
+      if (weight.isNotEmpty) weight,
+      if (price.isNotEmpty) price,
+      status,
+    ].join(' - ');
+  }
+
   Widget _operationsMenuPanel() {
     return Container(
       height: double.infinity,
@@ -5426,46 +6039,50 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               description: 'Fruits, prices, and restock signals',
               onTap: () => _show(AppScreen.inventory),
             ),
-            _operationMenuAction(
-              icon: Icons.monitor_heart_rounded,
-              title: 'Generate forecast',
-              description: _isGuestSession
-                  ? 'Sample demand preview'
-                  : 'AI demand and restock advice',
-              onTap: () => _show(AppScreen.forecast),
-            ),
-            _operationMenuAction(
-              icon: Icons.bar_chart_rounded,
-              title: 'View analytics',
-              description: _isGuestSession
-                  ? 'Sample sales preview'
-                  : 'Sales and revenue patterns',
-              onTap: () => _show(AppScreen.analytics),
-            ),
+            if (!_isWorkerSession)
+              _operationMenuAction(
+                icon: Icons.monitor_heart_rounded,
+                title: 'Generate forecast',
+                description: _isGuestSession
+                    ? 'Sample demand preview'
+                    : 'AI demand and restock advice',
+                onTap: () => _show(AppScreen.forecast),
+              ),
+            if (!_isWorkerSession)
+              _operationMenuAction(
+                icon: Icons.bar_chart_rounded,
+                title: 'View analytics',
+                description: _isGuestSession
+                    ? 'Sample sales preview'
+                    : 'Sales and revenue patterns',
+                onTap: () => _show(AppScreen.analytics),
+              ),
             _operationMenuAction(
               icon: Icons.receipt_long_rounded,
               title: 'History',
               description: 'All transaction records',
               onTap: () => _show(AppScreen.transactions),
             ),
-            _operationMenuAction(
-              icon: Icons.settings_rounded,
-              title: 'Account Settings',
-              description: _isGuestSession
-                  ? 'Create an account to unlock'
-                  : 'Biometrics, security, and AI model',
-              locked: _isGuestSession,
-              onTap: _openAccountSettings,
-            ),
-            _operationMenuAction(
-              icon: Icons.download_rounded,
-              title: _exportingReport ? 'Preparing report' : 'Download Data',
-              description: _isGuestSession
-                  ? 'Create an account to unlock'
-                  : 'PDF report with all app data',
-              locked: _isGuestSession,
-              onTap: _downloadData,
-            ),
+            if (!_isWorkerSession)
+              _operationMenuAction(
+                icon: Icons.settings_rounded,
+                title: 'Account Settings',
+                description: _isGuestSession
+                    ? 'Create an account to unlock'
+                    : 'Biometrics, security, and AI model',
+                locked: _isGuestSession,
+                onTap: _openAccountSettings,
+              ),
+            if (!_isWorkerSession)
+              _operationMenuAction(
+                icon: Icons.download_rounded,
+                title: _exportingReport ? 'Preparing report' : 'Download Data',
+                description: _isGuestSession
+                    ? 'Create an account to unlock'
+                    : 'PDF report with all app data',
+                locked: _isGuestSession,
+                onTap: _downloadData,
+              ),
             Divider(color: AppColors.borderSoft, height: 18),
             _operationMenuAction(
               icon: Icons.logout_rounded,
@@ -5485,11 +6102,18 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _showFullAccessRequired('Account Settings');
       return;
     }
+    if (_isWorkerSession) {
+      _toast('Owner access required.');
+      return;
+    }
     if (_operationsOpen && mounted) {
       setState(() {
         _operationsOpen = false;
       });
     }
+    _workerEmailController.text = _workerAccountEmail ?? '';
+    _workerPasswordController.clear();
+    _workerConfirmController.clear();
 
     await showDialog<void>(
       context: context,
@@ -5570,6 +6194,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                           ),
                         ],
                       ),
+                      Divider(color: AppColors.borderSoft, height: 28),
+                      _workerAccountSettingsPanel(setDialogState),
                       Divider(color: AppColors.borderSoft, height: 28),
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -5756,6 +6382,200 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     );
   }
 
+  Widget _workerAccountSettingsPanel(StateSetter setDialogState) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: AppColors.orange.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(
+                Icons.badge_rounded,
+                color: AppColors.orangeText,
+                size: 20,
+              ),
+            ),
+            SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: Text(
+                          'Worker account',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      _workerAccountEmail == null
+                          ? StatusBadge.orange('NOT SET')
+                          : StatusBadge.green('ACTIVE'),
+                    ],
+                  ),
+                  SizedBox(height: 3),
+                  Text(
+                    _workerAccountEmail == null
+                        ? 'Create the shared Worker login.'
+                        : 'Shared login: $_workerAccountEmail',
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 12,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        SizedBox(height: 10),
+        AppTextField(
+          controller: _workerEmailController,
+          label: 'Worker email',
+          hint: 'worker@email.com',
+          keyboardType: TextInputType.emailAddress,
+          prefixIcon: Icons.alternate_email_rounded,
+          textInputAction: TextInputAction.next,
+        ),
+        SizedBox(height: 10),
+        AppTextField(
+          controller: _workerPasswordController,
+          label: 'Worker password',
+          hint: 'At least 6 characters',
+          obscureText: true,
+          prefixIcon: Icons.lock_outline_rounded,
+          textInputAction: TextInputAction.next,
+        ),
+        SizedBox(height: 10),
+        AppTextField(
+          controller: _workerConfirmController,
+          label: 'Confirm worker password',
+          hint: 'Repeat password',
+          obscureText: true,
+          prefixIcon: Icons.verified_user_outlined,
+          textInputAction: TextInputAction.done,
+          onSubmitted: (_) => unawaited(
+            _createSharedWorkerAccount(dialogSetState: setDialogState),
+          ),
+        ),
+        SizedBox(height: 10),
+        PrimaryButton(
+          label: _creatingWorkerAccount
+              ? 'Creating worker'
+              : _workerAccountEmail == null
+              ? 'Create worker login'
+              : 'Replace worker login',
+          icon: Icons.person_add_alt_rounded,
+          onPressed: _creatingWorkerAccount
+              ? null
+              : () => unawaited(
+                  _createSharedWorkerAccount(dialogSetState: setDialogState),
+                ),
+          expanded: true,
+          busy: _creatingWorkerAccount,
+        ),
+      ],
+    );
+  }
+
+  Future<void> _createSharedWorkerAccount({StateSetter? dialogSetState}) async {
+    if (_creatingWorkerAccount) {
+      return;
+    }
+    final String ownerUid = _firebaseSyncService.currentUserId ?? '';
+    final String ownerEmail = _sessionEmail ?? '';
+    final String workerEmail = _workerEmailController.text.trim().toLowerCase();
+    final String password = _workerPasswordController.text;
+    final String confirm = _workerConfirmController.text;
+    if (!_isOwnerSession || ownerUid.isEmpty || ownerEmail.isEmpty) {
+      _toast('Sign in as Owner with Firebase before creating Worker login.');
+      return;
+    }
+    if (!_isValidEmail(workerEmail)) {
+      _toast('Use a valid worker email.');
+      return;
+    }
+    if (password.length < 6) {
+      _toast('Create a worker password with at least 6 characters.');
+      return;
+    }
+    if (password != confirm) {
+      _toast('Worker passwords do not match.');
+      return;
+    }
+
+    setState(() {
+      _creatingWorkerAccount = true;
+    });
+    dialogSetState?.call(() {});
+    try {
+      final FirebaseAccount workerAccount = await _firebaseSyncService
+          .createWorkerAccount(
+            ownerUid: ownerUid,
+            ownerEmail: ownerEmail,
+            workerEmail: workerEmail,
+            password: password,
+          );
+      await _database.saveAccount(
+        name: 'Worker',
+        email: workerEmail,
+        password: password,
+        role: AccountRole.worker,
+        ownerUid: ownerUid,
+        firebaseUid: workerAccount.uid,
+      );
+      await _database.saveSetting(_workerAccountEmailKey, workerEmail);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _workerAccountEmail = workerEmail;
+        _workerPasswordController.clear();
+        _workerConfirmController.clear();
+        _creatingWorkerAccount = false;
+      });
+      dialogSetState?.call(() {});
+      _toast('Worker login created.');
+    } on FirebaseSyncException catch (error, stackTrace) {
+      _logCloudSyncIssue('Create worker account failed', error, stackTrace);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _creatingWorkerAccount = false;
+        _cloudSyncStatus = _cloudStatusForSyncError(error.message);
+      });
+      dialogSetState?.call(() {});
+      _toast(error.message);
+    } catch (error, stackTrace) {
+      _logCloudSyncIssue(
+        'Unexpected worker account creation failure',
+        error,
+        stackTrace,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _creatingWorkerAccount = false;
+        _cloudSyncStatus = 'Firebase sync paused';
+      });
+      dialogSetState?.call(() {});
+      _toast('Worker login could not be created.');
+    }
+  }
+
   Widget _operationMenuAction({
     required IconData icon,
     required String title,
@@ -5918,6 +6738,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     }
 
     final bool cancelled = transaction.status == 'Cancelled';
+    final bool worker = _isWorkerSession;
     final _TransactionHistoryAction?
     action = await showModalBottomSheet<_TransactionHistoryAction>(
       context: context,
@@ -5935,7 +6756,11 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               children: <Widget>[
                 Row(
                   children: <Widget>[
-                    Expanded(child: SectionTitle('Manage sale')),
+                    Expanded(
+                      child: SectionTitle(
+                        worker ? 'Request sale change' : 'Manage sale',
+                      ),
+                    ),
                     IconButton(
                       tooltip: 'Close',
                       onPressed: () => Navigator.of(sheetContext).pop(),
@@ -5954,6 +6779,21 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   ),
                 ),
                 SizedBox(height: 10),
+                ListTile(
+                  leading: Icon(
+                    Icons.edit_note_rounded,
+                    color: AppColors.greenText,
+                  ),
+                  title: Text('Edit sale details'),
+                  subtitle: Text(
+                    worker
+                        ? 'Send fruit, weight, price, date, or status changes to the owner.'
+                        : 'Change fruit, weight, price, date, or status.',
+                  ),
+                  onTap: () => Navigator.of(
+                    sheetContext,
+                  ).pop(_TransactionHistoryAction.edit),
+                ),
                 ListTile(
                   leading: Icon(
                     cancelled ? Icons.restore_rounded : Icons.cancel_outlined,
@@ -6005,7 +6845,18 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     );
 
     switch (action) {
+      case _TransactionHistoryAction.edit:
+        await _showEditTransactionDialog(transaction);
+        return;
       case _TransactionHistoryAction.cancel:
+        if (worker) {
+          await _submitWorkerStatusRequest(
+            transaction,
+            requestedStatus: 'cancelled',
+            requestType: 'cancel_sale',
+          );
+          return;
+        }
         await _updateTransactionStatus(
           transaction,
           status: 'cancelled',
@@ -6014,6 +6865,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         );
         return;
       case _TransactionHistoryAction.restore:
+        if (worker) {
+          await _submitWorkerStatusRequest(
+            transaction,
+            requestedStatus: 'sold',
+            requestType: 'restore_sale',
+          );
+          return;
+        }
         await _updateTransactionStatus(
           transaction,
           status: 'sold',
@@ -6025,6 +6884,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         if (!confirmed) {
           return;
         }
+        if (worker) {
+          await _submitWorkerStatusRequest(
+            transaction,
+            requestedStatus: 'removed',
+            requestType: 'remove_sale',
+          );
+          return;
+        }
         await _updateTransactionStatus(
           transaction,
           status: 'removed',
@@ -6032,6 +6899,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         );
         return;
       case _TransactionHistoryAction.keep:
+        if (worker) {
+          await _submitWorkerStatusRequest(
+            transaction,
+            requestedStatus: transaction.status.toLowerCase(),
+            requestType: 'keep_sale',
+          );
+        }
+        return;
       case null:
         return;
     }
@@ -6089,6 +6964,452 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       return;
     }
     _toast(successMessage);
+  }
+
+  Future<LocalSale?> _saleForTransaction(TransactionData transaction) async {
+    final int? saleId = transaction.saleId;
+    if (saleId != null) {
+      final LocalSale? sale = await _database.getSaleById(saleId);
+      if (sale != null) {
+        return sale;
+      }
+    }
+    final String? cloudId = transaction.cloudId;
+    if (cloudId != null && cloudId.isNotEmpty) {
+      return _database.getSaleByCloudId(cloudId);
+    }
+    return null;
+  }
+
+  Map<String, Object?> _salePayload(LocalSale sale) {
+    return <String, Object?>{
+      if (sale.cloudId != null && sale.cloudId!.isNotEmpty)
+        'cloudId': sale.cloudId,
+      'fruitName': sale.fruitName,
+      'weightGrams': sale.weightGrams,
+      'unitPrice': sale.unitPrice,
+      'totalPrice': sale.totalPrice,
+      'status': sale.status,
+      'soldAt': sale.soldAt.toIso8601String(),
+    };
+  }
+
+  String _newWorkerRequestId(String type) {
+    final math.Random random = math.Random.secure();
+    final String suffix = List<int>.generate(
+      4,
+      (_) => random.nextInt(256),
+    ).map((int value) => value.toRadixString(16).padLeft(2, '0')).join();
+    return '${type}_${DateTime.now().microsecondsSinceEpoch}_$suffix';
+  }
+
+  Future<bool> _submitWorkerRequest({
+    required String type,
+    required Map<String, Object?> requestedPayload,
+    Map<String, Object?> originalPayload = const <String, Object?>{},
+    String? saleCloudId,
+    bool showToast = true,
+  }) async {
+    final String? ownerUid = _sessionOwnerUid;
+    final String? workerUid =
+        _firebaseSyncService.currentUserId ?? _sessionFirebaseUid;
+    if (!_isWorkerSession ||
+        ownerUid == null ||
+        ownerUid.isEmpty ||
+        workerUid == null ||
+        workerUid.isEmpty) {
+      if (showToast) {
+        _toast('Worker approval needs Firebase sign-in.');
+      }
+      return false;
+    }
+    final String requestId = _newWorkerRequestId(type);
+    await _database.saveWorkerRequest(
+      requestId: requestId,
+      type: type,
+      status: 'pending',
+      ownerUid: ownerUid,
+      workerUid: workerUid,
+      workerName: 'Worker',
+      saleCloudId: saleCloudId,
+      originalPayload: originalPayload,
+      requestedPayload: requestedPayload,
+    );
+    try {
+      await _syncWorkerRequestsToFirebase();
+      await _loadWorkerRequestsFromDatabase();
+      if (showToast) {
+        _toast('Request sent to owner.');
+      }
+      return true;
+    } on FirebaseSyncException catch (error, stackTrace) {
+      _logCloudSyncIssue('Worker request sync failed', error, stackTrace);
+      await _loadWorkerRequestsFromDatabase();
+      if (showToast) {
+        _toast('Request saved. It will send when Firebase is available.');
+      }
+      return true;
+    } catch (error, stackTrace) {
+      _logCloudSyncIssue(
+        'Unexpected worker request sync failure',
+        error,
+        stackTrace,
+      );
+      await _loadWorkerRequestsFromDatabase();
+      if (showToast) {
+        _toast('Request saved. It will send when Firebase is available.');
+      }
+      return true;
+    }
+  }
+
+  Future<void> _submitWorkerStatusRequest(
+    TransactionData transaction, {
+    required String requestedStatus,
+    required String requestType,
+  }) async {
+    final LocalSale? sale = await _saleForTransaction(transaction);
+    if (sale == null) {
+      _toast('This sale cannot be requested on this phone.');
+      return;
+    }
+    final String? cloudId = sale.cloudId;
+    if (cloudId == null || cloudId.isEmpty) {
+      _toast('Sync this sale before requesting owner approval.');
+      return;
+    }
+    final Map<String, Object?> original = _salePayload(sale);
+    final Map<String, Object?> requested = <String, Object?>{
+      ...original,
+      'status': requestedStatus,
+    };
+    await _submitWorkerRequest(
+      type: requestType,
+      saleCloudId: cloudId,
+      originalPayload: original,
+      requestedPayload: requested,
+    );
+  }
+
+  Future<void> _showEditTransactionDialog(TransactionData transaction) async {
+    final LocalSale? sale = await _saleForTransaction(transaction);
+    if (!mounted) {
+      return;
+    }
+    if (sale == null) {
+      _toast('This sale cannot be edited on this phone.');
+      return;
+    }
+    if (_isWorkerSession && (sale.cloudId == null || sale.cloudId!.isEmpty)) {
+      _toast('Sync this sale before requesting owner approval.');
+      return;
+    }
+
+    String selectedFruit = _catalog.containsKey(sale.fruitName)
+        ? sale.fruitName
+        : _scanReadyFruitOrder.first;
+    String selectedStatus = _displayStatus(sale.status);
+    DateTime selectedDateTime = sale.soldAt;
+    final TextEditingController weightController = TextEditingController(
+      text: (sale.weightGrams / 1000).toStringAsFixed(2),
+    );
+    final TextEditingController totalController = TextEditingController(
+      text: _priceInputFromCentavos(sale.totalPrice),
+    );
+
+    await showDialog<void>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setDialogState) {
+            Future<void> pickDate() async {
+              final DateTime? picked = await showDatePicker(
+                context: dialogContext,
+                initialDate: selectedDateTime,
+                firstDate: DateTime(2020),
+                lastDate: DateTime.now().add(const Duration(days: 1)),
+              );
+              if (picked == null) {
+                return;
+              }
+              setDialogState(() {
+                selectedDateTime = DateTime(
+                  picked.year,
+                  picked.month,
+                  picked.day,
+                  selectedDateTime.hour,
+                  selectedDateTime.minute,
+                );
+              });
+            }
+
+            Future<void> pickTime() async {
+              final TimeOfDay? picked = await showTimePicker(
+                context: dialogContext,
+                initialTime: TimeOfDay.fromDateTime(selectedDateTime),
+              );
+              if (picked == null) {
+                return;
+              }
+              setDialogState(() {
+                selectedDateTime = DateTime(
+                  selectedDateTime.year,
+                  selectedDateTime.month,
+                  selectedDateTime.day,
+                  picked.hour,
+                  picked.minute,
+                );
+              });
+            }
+
+            Future<void> submit() async {
+              final double? weightKg = double.tryParse(
+                weightController.text.trim().replaceAll(',', ''),
+              );
+              final int? totalPrice = _parsePriceInputCentavos(
+                totalController.text,
+              );
+              if (weightKg == null || weightKg <= 0) {
+                _toast('Enter a valid sale weight.');
+                return;
+              }
+              if (totalPrice == null || totalPrice <= 0) {
+                _toast('Enter a valid total price.');
+                return;
+              }
+              final int weightGrams = (weightKg * 1000).round();
+              final int unitPrice = ((totalPrice * 1000) / weightGrams).round();
+              final String status = switch (selectedStatus) {
+                'Cancelled' => 'cancelled',
+                'Removed' => 'removed',
+                _ => 'sold',
+              };
+              final Map<String, Object?> requested = <String, Object?>{
+                if (sale.cloudId != null && sale.cloudId!.isNotEmpty)
+                  'cloudId': sale.cloudId,
+                'fruitName': selectedFruit,
+                'weightGrams': weightGrams,
+                'unitPrice': unitPrice,
+                'totalPrice': totalPrice,
+                'status': status,
+                'soldAt': selectedDateTime.toIso8601String(),
+              };
+              if (_isWorkerSession) {
+                final bool sent = await _submitWorkerRequest(
+                  type: 'edit_sale',
+                  saleCloudId: sale.cloudId,
+                  originalPayload: _salePayload(sale),
+                  requestedPayload: requested,
+                );
+                if (sent && dialogContext.mounted) {
+                  Navigator.of(dialogContext).pop();
+                }
+                return;
+              }
+              await _database.updateSale(
+                id: sale.id,
+                cloudId: sale.cloudId,
+                fruitName: selectedFruit,
+                weightGrams: weightGrams,
+                unitPrice: unitPrice,
+                totalPrice: totalPrice,
+                status: status,
+                soldAt: selectedDateTime,
+              );
+              await _loadTransactionsFromDatabase();
+              unawaited(_syncTransactionsToFirebase());
+              if (dialogContext.mounted) {
+                Navigator.of(dialogContext).pop();
+              }
+              _toast('Sale updated.');
+            }
+
+            return AlertDialog(
+              backgroundColor: AppColors.bgCard,
+              title: Text(_isWorkerSession ? 'Request edit' : 'Edit sale'),
+              content: SizedBox(
+                width: 420,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      AppDropdown(
+                        value: selectedFruit,
+                        items: _scanReadyFruitOrder,
+                        onChanged: (String? value) {
+                          if (value == null) {
+                            return;
+                          }
+                          setDialogState(() {
+                            selectedFruit = value;
+                          });
+                        },
+                      ),
+                      SizedBox(height: 10),
+                      AppTextField(
+                        controller: weightController,
+                        label: 'Weight kg',
+                        hint: '1.25',
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        inputFormatters: <TextInputFormatter>[
+                          FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                        ],
+                      ),
+                      SizedBox(height: 10),
+                      AppTextField(
+                        controller: totalController,
+                        label: 'Total price',
+                        hint: '90.00',
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        inputFormatters: <TextInputFormatter>[
+                          FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                        ],
+                      ),
+                      SizedBox(height: 10),
+                      AppDropdown(
+                        value: selectedStatus,
+                        items: const <String>['Sold', 'Cancelled', 'Removed'],
+                        onChanged: (String? value) {
+                          if (value == null) {
+                            return;
+                          }
+                          setDialogState(() {
+                            selectedStatus = value;
+                          });
+                        },
+                      ),
+                      SizedBox(height: 10),
+                      Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: GhostButton(
+                              label: _formatDate(selectedDateTime),
+                              icon: Icons.calendar_month_rounded,
+                              onPressed: pickDate,
+                            ),
+                          ),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: GhostButton(
+                              label: _formatTime(selectedDateTime),
+                              icon: Icons.schedule_rounded,
+                              onPressed: pickTime,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: Text('Cancel'),
+                ),
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.orange,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: submit,
+                  icon: Icon(
+                    _isWorkerSession ? Icons.send_rounded : Icons.check_rounded,
+                    size: 18,
+                  ),
+                  label: Text(_isWorkerSession ? 'Send request' : 'Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    weightController.dispose();
+    totalController.dispose();
+  }
+
+  Future<void> _reviewWorkerRequest(
+    LocalWorkerRequest request, {
+    required bool approved,
+  }) async {
+    if (!_isOwnerSession || request.status != 'pending') {
+      return;
+    }
+    try {
+      if (approved) {
+        await _applyApprovedWorkerRequest(request);
+      }
+      await _database.updateWorkerRequestStatus(
+        requestId: request.requestId,
+        status: approved ? 'approved' : 'denied',
+      );
+      await _syncWorkerRequestsToFirebase();
+      await _loadWorkerRequestsFromDatabase();
+      if (approved) {
+        await _loadTransactionsFromDatabase();
+        unawaited(_syncTransactionsToFirebase());
+      }
+      _toast(approved ? 'Worker request approved.' : 'Worker request denied.');
+    } catch (error, stackTrace) {
+      _logCloudSyncIssue('Worker request review failed', error, stackTrace);
+      _toast('Request could not be reviewed.');
+    }
+  }
+
+  Future<void> _applyApprovedWorkerRequest(LocalWorkerRequest request) async {
+    final Map<String, Object?> payload = request.requestedData;
+    if (request.type == 'keep_sale') {
+      return;
+    }
+    final String? cloudId =
+        payload['cloudId'] as String? ?? request.saleCloudId;
+    final String? fruitName = payload['fruitName'] as String?;
+    final int? weightGrams = _intFromCloud(payload['weightGrams']);
+    final int? unitPrice = _intFromCloud(payload['unitPrice']);
+    final int? totalPrice = _intFromCloud(payload['totalPrice']);
+    final String status = payload['status'] as String? ?? 'sold';
+    final String? soldAtValue = payload['soldAt'] as String?;
+    final DateTime? soldAt = soldAtValue == null
+        ? null
+        : DateTime.tryParse(soldAtValue);
+    if (fruitName == null ||
+        fruitName.isEmpty ||
+        weightGrams == null ||
+        unitPrice == null ||
+        totalPrice == null ||
+        soldAt == null) {
+      throw StateError('Worker request has incomplete sale data.');
+    }
+    if (request.type == 'create_sale') {
+      await _database.addSale(
+        cloudId: cloudId,
+        fruitName: fruitName,
+        weightGrams: weightGrams,
+        unitPrice: unitPrice,
+        totalPrice: totalPrice,
+        status: status,
+        soldAt: soldAt,
+      );
+      return;
+    }
+    if (cloudId == null || cloudId.isEmpty) {
+      throw StateError('Worker request is missing the sale cloud ID.');
+    }
+    await _database.updateSale(
+      cloudId: cloudId,
+      fruitName: fruitName,
+      weightGrams: weightGrams,
+      unitPrice: unitPrice,
+      totalPrice: totalPrice,
+      status: status,
+      soldAt: soldAt,
+    );
   }
 
   DateTime get _historyFirstSelectableDate {
@@ -6355,6 +7676,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           _demoInventoryNotice(),
           SizedBox(height: 10),
         ],
+        if (_isWorkerSession) ...<Widget>[
+          _workerInventoryNotice(),
+          SizedBox(height: 10),
+        ],
         if (_inventoryLoading) ...<Widget>[
           AppCard(
             child: Row(
@@ -6413,7 +7738,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   priceConfigured: _inventoryPriceIsConfigured(fruit),
                   restockSignal: _restockSignalForFruit(fruit, stats: stats),
                   expanded: expanded,
-                  readOnly: _isGuestSession,
+                  readOnly: _isGuestSession || _isWorkerSession,
+                  readOnlyLabel: _isWorkerSession
+                      ? 'Worker view only.'
+                      : 'Preview only in Demo Mode.',
                   priceController: _priceInputControllerFor(fruit),
                   priceFocusNode: _priceInputFocusNodeFor(fruit),
                   onToggle: () {
@@ -6442,6 +7770,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       children: <Widget>[
         if (_isGuestSession) ...<Widget>[
           _demoInventoryNotice(),
+          SizedBox(height: 12),
+        ],
+        if (_isWorkerSession) ...<Widget>[
+          _workerInventoryNotice(),
           SizedBox(height: 12),
         ],
         AppCard(
@@ -6503,6 +7835,40 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           Expanded(
             child: Text(
               'Demo pricing is preview-only. Create an account to edit prices and sync real inventory.',
+              style: TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 12,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _workerInventoryNotice() {
+    return AppCard(
+      padding: const EdgeInsets.all(12),
+      child: Row(
+        children: <Widget>[
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: AppColors.orange.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(
+              Icons.lock_outline_rounded,
+              color: AppColors.orangeText,
+              size: 18,
+            ),
+          ),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Worker inventory is view-only.',
               style: TextStyle(
                 color: AppColors.textSecondary,
                 fontSize: 12,
@@ -6824,7 +8190,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                           ? 'All fruits are active'
                           : 'Select fruit to add',
                       items: availableFruits,
-                      onChanged: _isGuestSession
+                      onChanged: _isGuestSession || _isWorkerSession
                           ? null
                           : (String? value) {
                               setState(() => _fruitToAdd = value);
@@ -6836,8 +8202,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     child: AppTextField(
                       controller: _newPriceController,
                       label: 'Price per kg',
-                      hint: _isGuestSession ? 'Preview only' : '90.00',
-                      enabled: !_isGuestSession,
+                      hint: _isGuestSession || _isWorkerSession
+                          ? 'View only'
+                          : '90.00',
+                      enabled: !_isGuestSession && !_isWorkerSession,
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
@@ -6851,7 +8219,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     child: PrimaryButton(
                       label: 'Add fruit',
                       icon: Icons.add_rounded,
-                      onPressed: _isGuestSession || availableFruits.isEmpty
+                      onPressed:
+                          _isGuestSession ||
+                              _isWorkerSession ||
+                              availableFruits.isEmpty
                           ? null
                           : _addSelectedFruit,
                       expanded: true,
@@ -6870,7 +8241,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             children: _managedFruits.map((String fruit) {
               return FruitChip(
                 label: fruit,
-                onRemove: _isGuestSession ? null : () => _removeFruit(fruit),
+                onRemove: _isGuestSession || _isWorkerSession
+                    ? null
+                    : () => _removeFruit(fruit),
               );
             }).toList(),
           ),
@@ -11457,6 +12830,7 @@ class _InventoryFruitCard extends StatelessWidget {
     required this.restockSignal,
     required this.expanded,
     required this.readOnly,
+    required this.readOnlyLabel,
     required this.priceController,
     required this.priceFocusNode,
     required this.onToggle,
@@ -11472,6 +12846,7 @@ class _InventoryFruitCard extends StatelessWidget {
   final _RestockSignal restockSignal;
   final bool expanded;
   final bool readOnly;
+  final String readOnlyLabel;
   final TextEditingController priceController;
   final FocusNode priceFocusNode;
   final VoidCallback onToggle;
@@ -11611,7 +12986,7 @@ class _InventoryFruitCard extends StatelessWidget {
                 SizedBox(height: 8),
                 if (readOnly)
                   Text(
-                    'Preview only in Demo Mode.',
+                    readOnlyLabel,
                     style: TextStyle(
                       color: AppColors.textMuted,
                       fontSize: 11,
