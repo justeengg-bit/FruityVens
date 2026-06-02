@@ -6493,13 +6493,12 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     if (_creatingWorkerAccount) {
       return;
     }
-    final String ownerUid = _firebaseSyncService.currentUserId ?? '';
     final String ownerEmail = _sessionEmail ?? '';
     final String workerEmail = _workerEmailController.text.trim().toLowerCase();
     final String password = _workerPasswordController.text;
     final String confirm = _workerConfirmController.text;
-    if (!_isOwnerSession || ownerUid.isEmpty || ownerEmail.isEmpty) {
-      _toast('Sign in as Owner with Firebase before creating Worker login.');
+    if (!_isOwnerSession || ownerEmail.isEmpty) {
+      _toast('Sign in as Owner before creating Worker login.');
       return;
     }
     if (!_isValidEmail(workerEmail)) {
@@ -6520,6 +6519,18 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     });
     dialogSetState?.call(() {});
     try {
+      final String? ownerUid = await _ensureOwnerFirebaseSession();
+      if (ownerUid == null || ownerUid.isEmpty) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _creatingWorkerAccount = false;
+        });
+        dialogSetState?.call(() {});
+        _toast('Connect to Firebase with the Owner account first.');
+        return;
+      }
       final FirebaseAccount workerAccount = await _firebaseSyncService
           .createWorkerAccount(
             ownerUid: ownerUid,
@@ -6574,6 +6585,44 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       dialogSetState?.call(() {});
       _toast('Worker login could not be created.');
     }
+  }
+
+  Future<String?> _ensureOwnerFirebaseSession() async {
+    final String? currentUid = _firebaseSyncService.currentUserId;
+    if (currentUid != null && currentUid.isNotEmpty) {
+      return currentUid;
+    }
+    final String? email = _sessionEmail;
+    final String? password = _sessionPassword;
+    if (!_isOwnerSession ||
+        email == null ||
+        email.isEmpty ||
+        password == null ||
+        password.isEmpty) {
+      return null;
+    }
+    final FirebaseAccount? cloudAccount = await _firebaseSyncService
+        .signInWithEmail(email: email, password: password);
+    if (cloudAccount == null || cloudAccount.role != AccountRole.owner) {
+      return null;
+    }
+    await _database.saveAccount(
+      name: cloudAccount.name ?? email.split('@').first,
+      email: email,
+      password: password,
+      role: cloudAccount.role,
+      ownerUid: cloudAccount.ownerUid,
+      firebaseUid: cloudAccount.uid,
+    );
+    if (mounted) {
+      setState(() {
+        _sessionRole = AccountRole.owner;
+        _sessionFirebaseUid = cloudAccount.uid;
+        _sessionOwnerUid = cloudAccount.ownerUid;
+        _cloudSyncStatus = 'Signed in with Firebase';
+      });
+    }
+    return cloudAccount.uid;
   }
 
   Widget _operationMenuAction({
