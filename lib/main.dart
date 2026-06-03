@@ -6531,23 +6531,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         _toast('Connect to Firebase with the Owner account first.');
         return;
       }
-      final String ownerPassword = _sessionPassword ?? '';
-      if (ownerPassword.isEmpty) {
-        if (!mounted) {
-          return;
-        }
-        setState(() {
-          _creatingWorkerAccount = false;
-        });
-        dialogSetState?.call(() {});
-        _toast('Enter the Owner password before creating Worker login.');
-        return;
-      }
       final FirebaseAccount workerAccount = await _firebaseSyncService
           .createWorkerAccount(
             ownerUid: ownerUid,
             ownerEmail: ownerEmail,
-            ownerPassword: ownerPassword,
             workerEmail: workerEmail,
             password: password,
           );

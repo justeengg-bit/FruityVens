@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'package:http/http.dart' as http;
 
 import '../data/app_database.dart';
 
@@ -239,55 +241,46 @@ class FirebaseSyncService {
   Future<FirebaseAccount> createWorkerAccount({
     required String ownerUid,
     required String ownerEmail,
-    required String ownerPassword,
     required String workerEmail,
     required String password,
   }) async {
-    final auth.FirebaseAuth? firebaseAuth = _auth;
     final FirebaseDatabase? database = _database;
-    if (!isAvailable ||
-        firebaseAuth == null ||
-        database == null ||
-        ownerUid.trim().isEmpty) {
+    if (!isAvailable || database == null || ownerUid.trim().isEmpty) {
       throw const FirebaseSyncException(
         'Firebase is required to create the shared worker login.',
       );
     }
+    final String apiKey = Firebase.app().options.apiKey;
+    if (apiKey.isEmpty) {
+      throw const FirebaseSyncException(
+        'Firebase Auth API key is missing from this app.',
+      );
+    }
 
     try {
-      final auth.UserCredential credential = await firebaseAuth
-          .createUserWithEmailAndPassword(
-            email: workerEmail,
-            password: password,
-          );
-      final auth.User? user = credential.user;
-      if (user == null) {
+      final Map<String, Object?> signup = await _createAuthUserWithRest(
+        apiKey: apiKey,
+        email: workerEmail,
+        password: password,
+      );
+      final String? workerUid = signup['localId'] as String?;
+      final String? workerIdToken = signup['idToken'] as String?;
+      if (workerUid == null ||
+          workerUid.isEmpty ||
+          workerIdToken == null ||
+          workerIdToken.isEmpty) {
         throw const FirebaseSyncException(
           'Firebase worker account was not created.',
         );
       }
-      await user.updateDisplayName('Worker');
-      final String workerUid = user.uid;
 
-      await saveUserProfile(
+      await _saveWorkerProfileWithRest(
         uid: workerUid,
-        name: 'Worker',
         email: workerEmail,
-        role: AccountRole.worker,
         ownerUid: ownerUid,
+        ownerEmail: ownerEmail,
+        idToken: workerIdToken,
       );
-
-      final auth.UserCredential ownerCredential = await firebaseAuth
-          .signInWithEmailAndPassword(
-            email: ownerEmail,
-            password: ownerPassword,
-          );
-      final auth.User? restoredOwner = ownerCredential.user;
-      if (restoredOwner == null || restoredOwner.uid != ownerUid) {
-        throw const FirebaseSyncException(
-          'Owner Firebase session could not be restored after creating Worker.',
-        );
-      }
 
       final Map<String, Object?> ownerWorkerProfile = <String, Object?>{
         'uid': workerUid,
@@ -327,59 +320,83 @@ class FirebaseSyncService {
         role: AccountRole.worker,
         ownerUid: ownerUid,
       );
-    } on auth.FirebaseAuthException catch (error) {
-      await _restoreOwnerSessionBestEffort(
-        firebaseAuth,
-        ownerUid: ownerUid,
-        ownerEmail: ownerEmail,
-        ownerPassword: ownerPassword,
-      );
-      throw FirebaseSyncException(_authMessage(error));
     } on FirebaseException catch (error) {
-      await _restoreOwnerSessionBestEffort(
-        firebaseAuth,
-        ownerUid: ownerUid,
-        ownerEmail: ownerEmail,
-        ownerPassword: ownerPassword,
-      );
       throw FirebaseSyncException(_firebaseMessage(error));
-    } catch (error) {
-      await _restoreOwnerSessionBestEffort(
-        firebaseAuth,
-        ownerUid: ownerUid,
-        ownerEmail: ownerEmail,
-        ownerPassword: ownerPassword,
-      );
-      throw FirebaseSyncException('Worker login could not be created: $error');
     }
   }
 
-  Future<void> _restoreOwnerSessionBestEffort(
-    auth.FirebaseAuth firebaseAuth, {
+  Future<Map<String, Object?>> _createAuthUserWithRest({
+    required String apiKey,
+    required String email,
+    required String password,
+  }) async {
+    final Uri uri = Uri.https(
+      'identitytoolkit.googleapis.com',
+      '/v1/accounts:signUp',
+      <String, String>{'key': apiKey},
+    );
+    final http.Response response = await http
+        .post(
+          uri,
+          headers: const <String, String>{'Content-Type': 'application/json'},
+          body: jsonEncode(<String, Object?>{
+            'email': email,
+            'password': password,
+            'returnSecureToken': true,
+          }),
+        )
+        .timeout(const Duration(seconds: 20));
+    final Object? decoded = jsonDecode(response.body);
+    final Map<String, Object?> body = decoded is Map
+        ? Map<String, Object?>.from(decoded)
+        : <String, Object?>{};
+    if (response.statusCode >= 400) {
+      final Object? error = body['error'];
+      final String code = error is Map
+          ? (error['message'] ?? '').toString()
+          : '';
+      throw FirebaseSyncException(_identityToolkitMessage(code));
+    }
+    return body;
+  }
+
+  Future<void> _saveWorkerProfileWithRest({
+    required String uid,
+    required String email,
     required String ownerUid,
     required String ownerEmail,
-    required String ownerPassword,
+    required String idToken,
   }) async {
-    if (firebaseAuth.currentUser?.uid == ownerUid) {
+    final String? databaseURL = Firebase.app().options.databaseURL;
+    if (databaseURL == null || databaseURL.isEmpty) {
       return;
     }
-    try {
-      final auth.UserCredential credential = await firebaseAuth
-          .signInWithEmailAndPassword(
-            email: ownerEmail,
-            password: ownerPassword,
-          );
-      if (credential.user?.uid == ownerUid) {
-        return;
-      }
-    } catch (_) {
-      // Fall through to sign out so the app never keeps a half-created
-      // Worker as the active Firebase user after an Owner operation fails.
-    }
-    try {
-      await firebaseAuth.signOut();
-    } catch (_) {
-      // Best-effort cleanup only.
+    final String baseUrl = databaseURL.endsWith('/')
+        ? databaseURL.substring(0, databaseURL.length - 1)
+        : databaseURL;
+    final Uri uri = Uri.parse(
+      '$baseUrl/users/$uid/profile.json',
+    ).replace(queryParameters: <String, String>{'auth': idToken});
+    final http.Response response = await http
+        .patch(
+          uri,
+          headers: const <String, String>{'Content-Type': 'application/json'},
+          body: jsonEncode(<String, Object?>{
+            'uid': uid,
+            'email': email,
+            'name': 'Worker',
+            'role': AccountRole.worker.name,
+            'ownerUid': ownerUid,
+            'ownerEmail': ownerEmail,
+            'active': true,
+            'updatedAt': DateTime.now().toIso8601String(),
+          }),
+        )
+        .timeout(const Duration(seconds: 20));
+    if (response.statusCode >= 400) {
+      throw const FirebaseSyncException(
+        'Realtime Database rules blocked the Worker profile link.',
+      );
     }
   }
 
@@ -713,6 +730,27 @@ class FirebaseSyncService {
       items.add(Map<String, Object?>.from(item));
     }
     return items;
+  }
+
+  String _identityToolkitMessage(String code) {
+    if (code.contains('EMAIL_EXISTS')) {
+      return 'Worker account already exists. Use a different worker email.';
+    }
+    if (code.contains('INVALID_EMAIL')) {
+      return 'Use a valid worker email.';
+    }
+    if (code.contains('WEAK_PASSWORD')) {
+      return 'Create a stronger worker password.';
+    }
+    if (code.contains('OPERATION_NOT_ALLOWED')) {
+      return 'Enable Email/Password sign-in in Firebase Authentication.';
+    }
+    if (code.contains('NETWORK') || code.contains('TIMEOUT')) {
+      return 'Firebase needs internet to create the Worker login.';
+    }
+    return code.isEmpty
+        ? 'Firebase Auth could not create this Worker login.'
+        : 'Firebase Auth could not create this Worker login: $code';
   }
 
   String _authMessage(auth.FirebaseAuthException error) {
