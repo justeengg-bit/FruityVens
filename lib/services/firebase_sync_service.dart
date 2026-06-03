@@ -102,13 +102,18 @@ class FirebaseSyncService {
         throw const FirebaseSyncException('Firebase sign-in did not complete.');
       }
       final Map<String, Object?> workerLink = await _workerLinkForUid(user.uid);
-      final String? ownerUid = workerLink['ownerUid'] as String?;
+      final Map<String, Object?> profile = await _profileForUid(user.uid);
+      final String? ownerUid =
+          workerLink['ownerUid'] as String? ?? profile['ownerUid'] as String?;
+      final AccountRole profileRole = AccountRole.parse(profile['role']);
       final AccountRole role = ownerUid == null || ownerUid.isEmpty
-          ? AccountRole.owner
+          ? profileRole
           : AccountRole.worker;
       final String displayName = role == AccountRole.worker
           ? 'Worker'
-          : user.displayName ?? email.split('@').first;
+          : profile['name'] as String? ??
+                user.displayName ??
+                email.split('@').first;
       await _saveUserProfileBestEffort(
         uid: user.uid,
         name: displayName,
@@ -234,26 +239,23 @@ class FirebaseSyncService {
   Future<FirebaseAccount> createWorkerAccount({
     required String ownerUid,
     required String ownerEmail,
+    required String ownerPassword,
     required String workerEmail,
     required String password,
   }) async {
+    final auth.FirebaseAuth? firebaseAuth = _auth;
     final FirebaseDatabase? database = _database;
-    if (!isAvailable || database == null || ownerUid.trim().isEmpty) {
+    if (!isAvailable ||
+        firebaseAuth == null ||
+        database == null ||
+        ownerUid.trim().isEmpty) {
       throw const FirebaseSyncException(
         'Firebase is required to create the shared worker login.',
       );
     }
 
-    final FirebaseApp primaryApp = Firebase.app();
-    final FirebaseApp workerApp = await Firebase.initializeApp(
-      name: 'workerProvisioning_${DateTime.now().millisecondsSinceEpoch}',
-      options: primaryApp.options,
-    );
-    final auth.FirebaseAuth workerAuth = auth.FirebaseAuth.instanceFor(
-      app: workerApp,
-    );
     try {
-      final auth.UserCredential credential = await workerAuth
+      final auth.UserCredential credential = await firebaseAuth
           .createUserWithEmailAndPassword(
             email: workerEmail,
             password: password,
@@ -266,7 +268,28 @@ class FirebaseSyncService {
       }
       await user.updateDisplayName('Worker');
       final String workerUid = user.uid;
-      final Map<String, Object?> workerProfile = <String, Object?>{
+
+      await saveUserProfile(
+        uid: workerUid,
+        name: 'Worker',
+        email: workerEmail,
+        role: AccountRole.worker,
+        ownerUid: ownerUid,
+      );
+
+      final auth.UserCredential ownerCredential = await firebaseAuth
+          .signInWithEmailAndPassword(
+            email: ownerEmail,
+            password: ownerPassword,
+          );
+      final auth.User? restoredOwner = ownerCredential.user;
+      if (restoredOwner == null || restoredOwner.uid != ownerUid) {
+        throw const FirebaseSyncException(
+          'Owner Firebase session could not be restored after creating Worker.',
+        );
+      }
+
+      final Map<String, Object?> ownerWorkerProfile = <String, Object?>{
         'uid': workerUid,
         'email': workerEmail,
         'name': 'Worker',
@@ -276,18 +299,27 @@ class FirebaseSyncService {
         'active': true,
         'updatedAt': ServerValue.timestamp,
       };
-      await database.ref().update(<String, Object?>{
-        'users/$ownerUid/workerAccount': workerProfile,
-        'users/$workerUid/profile': workerProfile,
-        'workerLinks/${_databaseKey(workerUid)}': <String, Object?>{
-          'workerUid': workerUid,
-          'workerEmail': workerEmail,
-          'ownerUid': ownerUid,
-          'ownerEmail': ownerEmail,
-          'active': true,
-          'updatedAt': ServerValue.timestamp,
-        },
-      });
+
+      await database
+          .ref('users/$ownerUid/workerAccount')
+          .update(ownerWorkerProfile);
+      try {
+        await database
+            .ref('workerLinks/${_databaseKey(workerUid)}')
+            .update(<String, Object?>{
+              'workerUid': workerUid,
+              'workerEmail': workerEmail,
+              'ownerUid': ownerUid,
+              'ownerEmail': ownerEmail,
+              'active': true,
+              'updatedAt': ServerValue.timestamp,
+            });
+      } on FirebaseException catch (error) {
+        if (!_isPermissionDenied(error)) {
+          rethrow;
+        }
+      }
+
       return FirebaseAccount(
         uid: workerUid,
         email: workerEmail,
@@ -296,12 +328,58 @@ class FirebaseSyncService {
         ownerUid: ownerUid,
       );
     } on auth.FirebaseAuthException catch (error) {
+      await _restoreOwnerSessionBestEffort(
+        firebaseAuth,
+        ownerUid: ownerUid,
+        ownerEmail: ownerEmail,
+        ownerPassword: ownerPassword,
+      );
       throw FirebaseSyncException(_authMessage(error));
     } on FirebaseException catch (error) {
+      await _restoreOwnerSessionBestEffort(
+        firebaseAuth,
+        ownerUid: ownerUid,
+        ownerEmail: ownerEmail,
+        ownerPassword: ownerPassword,
+      );
       throw FirebaseSyncException(_firebaseMessage(error));
-    } finally {
-      await workerAuth.signOut();
-      await workerApp.delete();
+    } catch (error) {
+      await _restoreOwnerSessionBestEffort(
+        firebaseAuth,
+        ownerUid: ownerUid,
+        ownerEmail: ownerEmail,
+        ownerPassword: ownerPassword,
+      );
+      throw FirebaseSyncException('Worker login could not be created: $error');
+    }
+  }
+
+  Future<void> _restoreOwnerSessionBestEffort(
+    auth.FirebaseAuth firebaseAuth, {
+    required String ownerUid,
+    required String ownerEmail,
+    required String ownerPassword,
+  }) async {
+    if (firebaseAuth.currentUser?.uid == ownerUid) {
+      return;
+    }
+    try {
+      final auth.UserCredential credential = await firebaseAuth
+          .signInWithEmailAndPassword(
+            email: ownerEmail,
+            password: ownerPassword,
+          );
+      if (credential.user?.uid == ownerUid) {
+        return;
+      }
+    } catch (_) {
+      // Fall through to sign out so the app never keeps a half-created
+      // Worker as the active Firebase user after an Owner operation fails.
+    }
+    try {
+      await firebaseAuth.signOut();
+    } catch (_) {
+      // Best-effort cleanup only.
     }
   }
 
@@ -587,6 +665,28 @@ class FirebaseSyncService {
     return <String, Object?>{};
   }
 
+  Future<Map<String, Object?>> _profileForUid(String uid) async {
+    final FirebaseDatabase? database = _database;
+    if (database == null || uid.isEmpty) {
+      return <String, Object?>{};
+    }
+
+    try {
+      final DataSnapshot snapshot = await database
+          .ref('users/$uid/profile')
+          .get();
+      final Object? value = snapshot.value;
+      if (value is Map) {
+        return Map<String, Object?>.from(value);
+      }
+    } on FirebaseException catch (error) {
+      if (!_isPermissionDenied(error)) {
+        rethrow;
+      }
+    }
+    return <String, Object?>{};
+  }
+
   String? _dataUserId(String? ownerUid) {
     final String? cleanOwnerUid = ownerUid?.trim();
     if (cleanOwnerUid != null && cleanOwnerUid.isNotEmpty) {
@@ -632,6 +732,8 @@ class FirebaseSyncService {
         return 'Firebase needs internet to sync this account.';
       case 'operation-not-allowed':
         return 'Enable Email/Password sign-in in Firebase Authentication.';
+      case 'internal-error':
+        return 'Firebase Auth could not create this Worker login. Check internet, Email/Password sign-in, and Android Firebase setup, then try again.';
       default:
         return error.message ?? 'Firebase authentication failed.';
     }
