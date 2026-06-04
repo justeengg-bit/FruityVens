@@ -7,6 +7,7 @@ import 'dart:ui' as ui;
 
 import 'package:crypto/crypto.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
+import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart' show ValueNotifier, kReleaseMode;
 import 'package:flutter/material.dart';
@@ -2635,6 +2636,40 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     );
   }
 
+  Future<void> _debugPrintFirebaseTokenInfo() async {
+    if (kReleaseMode) {
+      return;
+    }
+    if (Firebase.apps.isEmpty) {
+      return;
+    }
+
+    final firebase_auth.User? user =
+        firebase_auth.FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      debugPrint('FruityVens Firebase token: no signed-in user.');
+      return;
+    }
+
+    try {
+      final firebase_auth.IdTokenResult tokenResult = await user
+          .getIdTokenResult();
+      debugPrint('FruityVens Firebase UID: ${user.uid}');
+      debugPrint('FruityVens Firebase email: ${user.email ?? 'none'}');
+      debugPrint(
+        'FruityVens Firebase token expires: ${tokenResult.expirationTime}',
+      );
+      debugPrint('FruityVens Firebase token claims: ${tokenResult.claims}');
+    } catch (error, stackTrace) {
+      developer.log(
+        'Firebase token debug print failed',
+        name: 'FruityVensFirebase',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+  }
+
   Future<void> _signIn() async {
     if (_authBusy) {
       return;
@@ -2795,6 +2830,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _screen = AppScreen.dashboard;
     });
     await _syncWhenInternetReturns();
+    await _debugPrintFirebaseTokenInfo();
     if (_rememberMe) {
       _toast('Signed in. This device will remember the session.');
     }
@@ -2848,6 +2884,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       await _pullTransactionsFromFirebase();
       await _pullWorkerRequestsFromFirebase();
       _startFirebaseLiveSync();
+      await _debugPrintFirebaseTokenInfo();
     } on FirebaseSyncException catch (error, stackTrace) {
       _logCloudSyncIssue(
         'Local account cloud refresh failed',
@@ -3682,6 +3719,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _screen = AppScreen.dashboard;
     });
     await _syncWhenInternetReturns();
+    await _debugPrintFirebaseTokenInfo();
     if (createdLocalGoogleAccount) {
       _toast(
         'Google account saved. Use your new password for offline sign-in.',
@@ -3948,6 +3986,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _screen = AppScreen.dashboard;
     });
     await _syncWhenInternetReturns();
+    await _debugPrintFirebaseTokenInfo();
     _toast(
       cloudError == null
           ? 'Account created for $name.'
