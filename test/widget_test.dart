@@ -569,6 +569,198 @@ void main() {
     expect(find.textContaining('Banana'), findsNothing);
   });
 
+  testWidgets('Worker can send request after editing a synced sale', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(720, 1612);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final AppDatabase database = AppDatabase.inMemory();
+    await database.saveAccount(
+      name: 'Worker',
+      email: 'worker@fruityvens.test',
+      password: 'worker123',
+      role: AccountRole.worker,
+      ownerUid: 'owner-uid',
+      firebaseUid: 'worker-uid',
+    );
+    await database.addSale(
+      cloudId: 'sale-cloud-1',
+      fruitName: 'Mango',
+      weightGrams: 1200,
+      unitPrice: 6000,
+      totalPrice: 7200,
+      soldAt: DateTime.now(),
+    );
+
+    await tester.pumpWidget(FruityVensApp(database: database));
+    await tester.tap(find.text('Worker'));
+    await tester.pumpAndSettle();
+    final Finder fields = find.byType(EditableText);
+    await tester.enterText(fields.at(0), 'worker@fruityvens.test');
+    await tester.enterText(fields.at(1), 'worker123');
+    await tester.tap(find.text('Sign in'));
+    await tester.pump(const Duration(seconds: 1));
+    await dismissPhoneLinkPrompt(tester);
+
+    await openOperationsMenu(tester);
+    await tester.tap(find.text('History'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Manage sale'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Edit sale details'));
+    await tester.pumpAndSettle();
+
+    final Finder totalPriceField = find.byWidgetPredicate((Widget widget) {
+      return widget is EditableText && widget.controller.text == '72.00';
+    });
+    expect(totalPriceField, findsOneWidget);
+    await tester.enterText(totalPriceField, '80.00');
+    await tester.tap(find.text('Send request'));
+    await tester.pumpAndSettle();
+
+    final List<LocalWorkerRequest> requests = await database.getWorkerRequests(
+      ownerUid: 'owner-uid',
+    );
+    expect(requests, hasLength(1));
+    expect(requests.single.type, 'edit_sale');
+    expect(requests.single.saleCloudId, 'sale-cloud-1');
+    expect(requests.single.requestedData['totalPrice'], 8000);
+    expect(
+      find.text('Request saved. It will send when Firebase is available.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('Worker scale sale is saved without owner approval', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(720, 1612);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final AppDatabase database = AppDatabase.inMemory();
+    await database.saveAccount(
+      name: 'Worker',
+      email: 'worker@fruityvens.test',
+      password: 'worker123',
+      role: AccountRole.worker,
+      ownerUid: 'owner-uid',
+      firebaseUid: 'worker-uid',
+    );
+    await database.saveWorkerRequest(
+      requestId: 'create_sale_scale_1',
+      type: 'create_sale',
+      status: 'pending',
+      ownerUid: 'owner-uid',
+      workerUid: 'worker-uid',
+      workerName: 'Worker',
+      saleCloudId: 'scale_fruityvens_scale_01_sale_1',
+      requestedPayload: <String, Object?>{
+        'cloudId': 'scale_fruityvens_scale_01_sale_1',
+        'fruitName': 'Mango',
+        'weightGrams': 1250,
+        'unitPrice': 6000,
+        'totalPrice': 7500,
+        'status': 'sold',
+        'soldAt': DateTime(2026, 6, 4, 10, 30).toIso8601String(),
+      },
+    );
+
+    await tester.pumpWidget(FruityVensApp(database: database));
+    await tester.tap(find.text('Worker'));
+    await tester.pumpAndSettle();
+    final Finder fields = find.byType(EditableText);
+    await tester.enterText(fields.at(0), 'worker@fruityvens.test');
+    await tester.enterText(fields.at(1), 'worker123');
+    await tester.tap(find.text('Sign in'));
+    await tester.pump(const Duration(seconds: 1));
+    await dismissPhoneLinkPrompt(tester);
+
+    final List<LocalSale> sales = await database.getSalesTransactions();
+    expect(sales, hasLength(1));
+    expect(sales.single.cloudId, 'scale_fruityvens_scale_01_sale_1');
+    expect(sales.single.fruitName, 'Mango');
+    expect(sales.single.status, 'sold');
+
+    final List<LocalWorkerRequest> pendingRequests = await database
+        .getWorkerRequests(status: 'pending', ownerUid: 'owner-uid');
+    expect(pendingRequests, isEmpty);
+    final List<LocalWorkerRequest> requests = await database.getWorkerRequests(
+      ownerUid: 'owner-uid',
+    );
+    expect(requests.single.status, 'approved');
+  });
+
+  testWidgets('Worker can request a manually added sale from history', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(720, 1612);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final AppDatabase database = AppDatabase.inMemory();
+    await database.saveAccount(
+      name: 'Worker',
+      email: 'worker@fruityvens.test',
+      password: 'worker123',
+      role: AccountRole.worker,
+      ownerUid: 'owner-uid',
+      firebaseUid: 'worker-uid',
+    );
+
+    await tester.pumpWidget(FruityVensApp(database: database));
+    await tester.tap(find.text('Worker'));
+    await tester.pumpAndSettle();
+    final Finder fields = find.byType(EditableText);
+    await tester.enterText(fields.at(0), 'worker@fruityvens.test');
+    await tester.enterText(fields.at(1), 'worker123');
+    await tester.tap(find.text('Sign in'));
+    await tester.pump(const Duration(seconds: 1));
+    await dismissPhoneLinkPrompt(tester);
+
+    await openOperationsMenu(tester);
+    await tester.tap(find.text('History'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Request sale'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(EditableText).at(0), '1.50');
+    await tester.enterText(find.byType(EditableText).at(1), '120.00');
+    await tester.tap(find.text('Send request'));
+    await tester.pumpAndSettle();
+
+    final List<LocalWorkerRequest> requests = await database.getWorkerRequests(
+      ownerUid: 'owner-uid',
+    );
+    expect(requests, hasLength(1));
+    expect(requests.single.type, 'create_sale');
+    expect(requests.single.saleCloudId, isNotEmpty);
+    expect(
+      requests.single.requestedData['cloudId'],
+      requests.single.saleCloudId,
+    );
+    expect(requests.single.requestedData['fruitName'], 'Apple');
+    expect(requests.single.requestedData['weightGrams'], 1500);
+    expect(requests.single.requestedData['totalPrice'], 12000);
+    expect(await database.getSalesTransactions(), isEmpty);
+    expect(
+      find.text('Request saved. It will send when Firebase is available.'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('Inventory adds Philippine fruits and saves typed prices', (
     WidgetTester tester,
   ) async {
