@@ -3,6 +3,14 @@ import 'dart:convert';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
+String _pricingUnitValue(Object? value) {
+  final String clean = (value ?? '').toString().trim().toLowerCase();
+  if (clean == 'piece' || clean == 'pc' || clean == 'each') {
+    return 'piece';
+  }
+  return 'kg';
+}
+
 enum AccountRole {
   owner,
   worker;
@@ -18,6 +26,7 @@ class LocalFruit {
     required this.name,
     required this.iconKey,
     required this.price,
+    this.pricingUnit = 'kg',
     required this.stock,
     required this.managed,
     this.dirty = false,
@@ -27,6 +36,7 @@ class LocalFruit {
   final String name;
   final String iconKey;
   final int price;
+  final String pricingUnit;
   final int stock;
   final bool managed;
   final bool dirty;
@@ -37,6 +47,7 @@ class LocalFruit {
       name: map['name']! as String,
       iconKey: map['icon_key']! as String,
       price: map['price']! as int,
+      pricingUnit: _pricingUnitValue(map['price_unit']),
       stock: map['stock']! as int,
       managed: (map['managed']! as int) == 1,
       dirty: ((map['dirty'] as int?) ?? 0) == 1,
@@ -88,6 +99,7 @@ class SeedFruit {
     required this.name,
     required this.iconKey,
     required this.price,
+    this.pricingUnit = 'kg',
     required this.stock,
     required this.managed,
   });
@@ -95,6 +107,7 @@ class SeedFruit {
   final String name;
   final String iconKey;
   final int price;
+  final String pricingUnit;
   final int stock;
   final bool managed;
 }
@@ -296,7 +309,7 @@ class AppDatabase {
     if (_memory) {
       opened = await openDatabase(
         inMemoryDatabasePath,
-        version: 6,
+        version: 7,
         onCreate: _createSchema,
         onUpgrade: _upgradeSchema,
       );
@@ -304,7 +317,7 @@ class AppDatabase {
       final String dbPath = await getDatabasesPath();
       opened = await openDatabase(
         p.join(dbPath, 'fruityvens.sqlite'),
-        version: 6,
+        version: 7,
         onCreate: _createSchema,
         onUpgrade: _upgradeSchema,
       );
@@ -319,6 +332,7 @@ class AppDatabase {
         name TEXT PRIMARY KEY,
         icon_key TEXT NOT NULL,
         price INTEGER NOT NULL,
+        price_unit TEXT NOT NULL DEFAULT 'kg',
         stock INTEGER NOT NULL,
         managed INTEGER NOT NULL DEFAULT 1,
         dirty INTEGER NOT NULL DEFAULT 0,
@@ -437,6 +451,18 @@ class AppDatabase {
       );
       await _createWorkerRequestSchema(db);
     }
+    if (oldVersion < 7) {
+      await _addColumnIfMissing(
+        db,
+        table: 'local_fruits',
+        column: 'price_unit',
+        definition: "TEXT NOT NULL DEFAULT 'kg'",
+      );
+      await db.execute(
+        "UPDATE local_fruits SET price_unit = 'piece' "
+        "WHERE name = 'Apple' AND price <= 0",
+      );
+    }
     await db.execute(
       'CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_transactions_cloud_id '
       'ON sales_transactions(cloud_id) WHERE cloud_id IS NOT NULL',
@@ -530,6 +556,7 @@ class AppDatabase {
             name: fruit.name,
             iconKey: fruit.iconKey,
             price: fruit.price,
+            pricingUnit: fruit.pricingUnit,
             stock: fruit.stock,
             managed: fruit.managed,
             updatedAt: DateTime.now(),
@@ -547,6 +574,7 @@ class AppDatabase {
         'name': fruit.name,
         'icon_key': fruit.iconKey,
         'price': fruit.price,
+        'price_unit': _pricingUnitValue(fruit.pricingUnit),
         'stock': fruit.stock,
         'managed': fruit.managed ? 1 : 0,
         'dirty': 0,
@@ -670,6 +698,7 @@ class AppDatabase {
     required String name,
     required String iconKey,
     required int price,
+    String pricingUnit = 'kg',
     required int stock,
   }) async {
     if (_memory) {
@@ -677,6 +706,7 @@ class AppDatabase {
         name: name,
         iconKey: iconKey,
         price: price,
+        pricingUnit: _pricingUnitValue(pricingUnit),
         stock: stock,
         managed: true,
         dirty: true,
@@ -691,6 +721,7 @@ class AppDatabase {
       'name': name,
       'icon_key': iconKey,
       'price': price,
+      'price_unit': _pricingUnitValue(pricingUnit),
       'stock': stock,
       'managed': 1,
       'dirty': 1,
@@ -700,7 +731,12 @@ class AppDatabase {
       entityType: 'fruit',
       entityId: name,
       action: 'upsert',
-      payload: '{"name":"$name","price":$price,"stock":$stock}',
+      payload: jsonEncode(<String, Object?>{
+        'name': name,
+        'price': price,
+        'pricingUnit': _pricingUnitValue(pricingUnit),
+        'stock': stock,
+      }),
     );
   }
 
@@ -708,6 +744,7 @@ class AppDatabase {
     required String name,
     required String iconKey,
     required int price,
+    String pricingUnit = 'kg',
     required int stock,
     required bool managed,
   }) async {
@@ -716,6 +753,7 @@ class AppDatabase {
         name: name,
         iconKey: iconKey,
         price: price,
+        pricingUnit: _pricingUnitValue(pricingUnit),
         stock: stock,
         managed: managed,
         updatedAt: DateTime.now(),
@@ -728,6 +766,7 @@ class AppDatabase {
       'name': name,
       'icon_key': iconKey,
       'price': price,
+      'price_unit': _pricingUnitValue(pricingUnit),
       'stock': stock,
       'managed': managed ? 1 : 0,
       'dirty': 0,
@@ -743,6 +782,7 @@ class AppDatabase {
           name: fruit.name,
           iconKey: fruit.iconKey,
           price: price,
+          pricingUnit: fruit.pricingUnit,
           stock: fruit.stock,
           managed: fruit.managed,
           dirty: true,
@@ -774,6 +814,7 @@ class AppDatabase {
   Future<void> updateFruitInventory({
     required String name,
     required int price,
+    String pricingUnit = 'kg',
     required int stock,
   }) async {
     if (_memory) {
@@ -783,6 +824,7 @@ class AppDatabase {
           name: fruit.name,
           iconKey: fruit.iconKey,
           price: price,
+          pricingUnit: _pricingUnitValue(pricingUnit),
           stock: stock,
           managed: fruit.managed,
           dirty: true,
@@ -797,6 +839,7 @@ class AppDatabase {
       'local_fruits',
       <String, Object?>{
         'price': price,
+        'price_unit': _pricingUnitValue(pricingUnit),
         'stock': stock,
         'dirty': 1,
         'updated_at': DateTime.now().toIso8601String(),
@@ -808,7 +851,12 @@ class AppDatabase {
       entityType: 'fruit',
       entityId: name,
       action: 'inventory_update',
-      payload: '{"name":"$name","price":$price,"stock":$stock}',
+      payload: jsonEncode(<String, Object?>{
+        'name': name,
+        'price': price,
+        'pricingUnit': _pricingUnitValue(pricingUnit),
+        'stock': stock,
+      }),
     );
   }
 
@@ -820,6 +868,7 @@ class AppDatabase {
           name: fruit.name,
           iconKey: fruit.iconKey,
           price: fruit.price,
+          pricingUnit: fruit.pricingUnit,
           stock: fruit.stock,
           managed: false,
           dirty: true,
@@ -1149,6 +1198,7 @@ class AppDatabase {
           name: fruit.name,
           iconKey: fruit.iconKey,
           price: fruit.price,
+          pricingUnit: fruit.pricingUnit,
           stock: fruit.stock,
           managed: fruit.managed,
           dirty: false,
@@ -1178,6 +1228,7 @@ class AppDatabase {
           name: fruit.name,
           iconKey: fruit.iconKey,
           price: fruit.price,
+          pricingUnit: fruit.pricingUnit,
           stock: fruit.stock,
           managed: fruit.managed,
           dirty: false,

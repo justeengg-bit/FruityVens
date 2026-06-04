@@ -589,7 +589,7 @@ void main() {
     await tester.tap(find.byTooltip('Manage fruits'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.tap(find.byType(DropdownButtonFormField<String>).first);
     await tester.pumpAndSettle();
     expect(find.text('Lemon'), findsOneWidget);
     expect(find.text('Papaya'), findsOneWidget);
@@ -608,6 +608,7 @@ void main() {
     await tester.tap(find.byTooltip('Done managing fruits'));
     await tester.pumpAndSettle();
     expect(find.text('PHP 42.50/kg'), findsOneWidget);
+    expect(find.text('Set price per piece'), findsWidgets);
 
     final Finder lemonPriceField = find.byWidgetPredicate((Widget widget) {
       return widget is EditableText && widget.controller.text == '42.50';
@@ -638,5 +639,24 @@ void main() {
     expect(find.text('PHP 62.25/kg'), findsOneWidget);
     lemon = await database.getManagedFruit('Lemon');
     expect(lemon?.price, 6225);
+
+    final Finder visibleUnitDropdown = find
+        .byType(DropdownButtonFormField<String>)
+        .hitTestable()
+        .last;
+    await tester.ensureVisible(visibleUnitDropdown);
+    await tester.tap(visibleUnitDropdown);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Per piece').hitTestable().last);
+    await tester.pumpAndSettle();
+    final Finder visibleSaveButtonAfterUnit = find
+        .widgetWithText(PrimaryButton, 'Save')
+        .hitTestable();
+    await tester.tap(visibleSaveButtonAfterUnit);
+    await tester.pumpAndSettle();
+
+    expect(find.text('PHP 62.25/pc'), findsOneWidget);
+    lemon = await database.getManagedFruit('Lemon');
+    expect(lemon?.pricingUnit, 'piece');
   });
 }

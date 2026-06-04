@@ -28,6 +28,46 @@ final GlobalKey<ScaffoldMessengerState> fruityVensMessengerKey =
 const String _appCheckDebugToken = String.fromEnvironment(
   'FRUITYVENS_APP_CHECK_DEBUG_TOKEN',
 );
+const String _pricingUnitKg = 'kg';
+const String _pricingUnitPiece = 'piece';
+const List<String> _pricingUnitOptions = <String>[
+  _pricingUnitKg,
+  _pricingUnitPiece,
+];
+
+String _normalizePricingUnit(Object? value) {
+  final String clean = (value ?? '').toString().trim().toLowerCase();
+  if (clean == _pricingUnitPiece || clean == 'pc' || clean == 'each') {
+    return _pricingUnitPiece;
+  }
+  return _pricingUnitKg;
+}
+
+String _pricingUnitName(String unit) {
+  return _normalizePricingUnit(unit) == _pricingUnitPiece ? 'piece' : 'kg';
+}
+
+String _pricingUnitShortName(String unit) {
+  return _normalizePricingUnit(unit) == _pricingUnitPiece ? 'pc' : 'kg';
+}
+
+String _pricingUnitDropdownLabel(String unit) {
+  return _normalizePricingUnit(unit) == _pricingUnitPiece
+      ? 'Per piece'
+      : 'Per kg';
+}
+
+String _priceWithPricingUnit(int price, String unit) {
+  return '${money(price)}/${_pricingUnitShortName(unit)}';
+}
+
+String _unsetPriceLabelForUnit(String unit) {
+  return 'Set price per ${_pricingUnitName(unit)}';
+}
+
+String _priceEntryLabelForUnit(String unit) {
+  return 'Enter price / ${_pricingUnitName(unit)}';
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -281,6 +321,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   double _historySwipeDragOffset = 0;
   bool _historySwipeTriggered = false;
   String? _fruitToAdd;
+  String _newPricingUnit = _pricingUnitKg;
   String? _expandedInventoryFruit;
   String? _priceConflictNotice;
   String _scaleBaseUrl = '';
@@ -302,6 +343,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   ];
   final Map<String, int> _prices = <String, int>{};
   final Map<String, int> _draftPrices = <String, int>{};
+  final Map<String, String> _pricingUnits = <String, String>{};
   final Map<String, int> _stocks = <String, int>{};
 
   static const List<TransactionData> _demoTransactionHistory =
@@ -579,7 +621,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       title: 'Set up your fruit stall',
       body:
           'Create or sign in to a real account, set fruit prices, and keep sales available on this phone.',
-      points: <String>['Real account', 'Price per kg', 'Offline ready'],
+      points: <String>['Real account', 'Unit pricing', 'Offline ready'],
     ),
     _WalkthroughStep(
       icon: Icons.center_focus_strong_rounded,
@@ -1045,10 +1087,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         return false;
       }
     }
+    final int? inventoryKgPrice =
+        _pricingUnitFor(log.fruitName) == _pricingUnitKg
+        ? _inventorySavedPrice(log.fruitName)
+        : null;
     final int unitPrice = log.pricePerKgCentavos > 0
         ? log.pricePerKgCentavos
-        : (_inventorySavedPrice(log.fruitName) ??
-              _catalogPriceCentavos(log.fruitName));
+        : (inventoryKgPrice ?? _catalogPriceCentavos(log.fruitName));
     final int totalPrice = log.priceCentavos > 0
         ? log.priceCentavos
         : ((unitPrice * log.weightGrams) / 1000).round();
@@ -1267,6 +1312,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   void _syncFruitState() {
     for (final String fruit in _managedFruits) {
       _prices.putIfAbsent(fruit, () => 0);
+      _pricingUnits.putIfAbsent(fruit, () => _defaultPricingUnitFor(fruit));
       _stocks.putIfAbsent(fruit, () => 0);
     }
   }
@@ -1307,6 +1353,16 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             ),
           ),
         );
+      _pricingUnits
+        ..clear()
+        ..addEntries(
+          scanReadyFruits.map(
+            (LocalFruit fruit) => MapEntry<String, String>(
+              fruit.name,
+              _normalizePricingUnit(fruit.pricingUnit),
+            ),
+          ),
+        );
       _stocks
         ..clear()
         ..addEntries(
@@ -1329,6 +1385,16 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           ..addEntries(
             _scanReadyFruitOrder.map((String fruit) {
               return MapEntry<String, int>(fruit, _catalogPriceCentavos(fruit));
+            }),
+          );
+        _pricingUnits
+          ..clear()
+          ..addEntries(
+            _scanReadyFruitOrder.map((String fruit) {
+              return MapEntry<String, String>(
+                fruit,
+                _defaultPricingUnitFor(fruit),
+              );
             }),
           );
         _stocks
@@ -1515,6 +1581,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         name: info.name,
         iconKey: info.icon.codePoint.toString(),
         price: 0,
+        pricingUnit: _defaultPricingUnitFor(info.name),
         stock: 0,
         managed: _managedFruits.contains(info.name),
       );
@@ -1527,6 +1594,20 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
   int _catalogPriceCentavos(String fruit) {
     return ((_catalog[fruit]?.price ?? 0) * 100).round();
+  }
+
+  String _defaultPricingUnitFor(String fruit) {
+    return fruit == 'Apple' ? _pricingUnitPiece : _pricingUnitKg;
+  }
+
+  String _pricingUnitFor(String fruit) {
+    return _normalizePricingUnit(
+      _pricingUnits[fruit] ?? _defaultPricingUnitFor(fruit),
+    );
+  }
+
+  String _newPricingUnitForSelectedFruit() {
+    return _normalizePricingUnit(_newPricingUnit);
   }
 
   bool _inventoryPriceIsConfigured(String fruit) {
@@ -1706,12 +1787,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   Map<String, Object?> _fruitSyncPayload(String fruit) {
     final FruitInfo info = _catalog[fruit]!;
     final int priceCentavos = _inventorySavedPrice(fruit) ?? 0;
+    final String pricingUnit = _pricingUnitFor(fruit);
     return <String, Object?>{
       'name': fruit,
       'iconKey': info.icon.codePoint.toString(),
       'price': priceCentavos / 100,
       'priceCentavos': priceCentavos,
       'priceUnit': 'centavos',
+      'pricingUnit': pricingUnit,
       'managed': _managedFruits.contains(fruit),
       'restockMode': 'sales_velocity',
       'sourceDeviceId': _deviceId ?? '',
@@ -1842,13 +1925,19 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       }
       final FruitInfo info = _catalog[name]!;
       final int cloudPrice = _priceCentavosFromCloud(fruit);
+      final String cloudPricingUnit = _pricingUnitFromCloud(
+        fruit,
+        fallback: _defaultPricingUnitFor(name),
+      );
       final LocalFruit? localFruit = await _database.getManagedFruit(name);
       if (!_canApplyCloudLiveSync(liveSyncUserId, liveSyncGeneration)) {
         return;
       }
       if (localFruit != null &&
           localFruit.dirty &&
-          localFruit.price != cloudPrice) {
+          (localFruit.price != cloudPrice ||
+              _normalizePricingUnit(localFruit.pricingUnit) !=
+                  cloudPricingUnit)) {
         _priceConflictFruits.add(name);
         await _recordPriceChange(
           fruit: name,
@@ -1860,7 +1949,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         if (mounted) {
           setState(() {
             _priceConflictNotice =
-                '$name price changed elsewhere. Local price was kept.';
+                '$name price or unit changed elsewhere. Local setup was kept.';
           });
         }
         continue;
@@ -1886,6 +1975,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         name: name,
         iconKey: fruit['iconKey'] as String? ?? info.icon.codePoint.toString(),
         price: cloudPrice,
+        pricingUnit: cloudPricingUnit,
         stock: 0,
         managed: fruit['managed'] as bool? ?? true,
       );
@@ -2077,6 +2167,19 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     return 0;
   }
 
+  String _pricingUnitFromCloud(
+    Map<String, Object?> fruit, {
+    required String fallback,
+  }) {
+    final Object? explicitUnit =
+        fruit['pricingUnit'] ?? fruit['priceMeasurementUnit'];
+    final String clean = (explicitUnit ?? '').toString().trim();
+    if (clean.isEmpty) {
+      return _normalizePricingUnit(fallback);
+    }
+    return _normalizePricingUnit(clean);
+  }
+
   Future<void> _recordPriceChange({
     required String fruit,
     required int oldPrice,
@@ -2125,6 +2228,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     required String fruit,
     required int oldPrice,
     required int newPrice,
+    required String pricingUnit,
   }) async {
     if (!_isSuspiciousPriceChange(oldPrice: oldPrice, newPrice: newPrice)) {
       return true;
@@ -2143,7 +2247,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               Text(
-                '$fruit is being set to ${money(newPrice)}/kg.',
+                '$fruit is being set to ${_priceWithPricingUnit(newPrice, pricingUnit)}.',
                 style: TextStyle(
                   color: AppColors.textPrimary,
                   fontSize: 14,
@@ -2153,7 +2257,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               SizedBox(height: 8),
               Text(
                 oldPrice > 0
-                    ? 'Previous price was ${money(oldPrice)}/kg. This is a large or unusual change, so FruityVens will save it in price history.'
+                    ? 'Previous price was ${_priceWithPricingUnit(oldPrice, pricingUnit)}. This is a large or unusual change, so FruityVens will save it in price history.'
                     : 'This looks outside the usual fruit price range. FruityVens will save it in price history.',
                 style: TextStyle(
                   color: AppColors.textSecondary,
@@ -2306,6 +2410,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   }
 
   Future<void> _publishScalePriceUpdate(String fruit) async {
+    if (_pricingUnitFor(fruit) != _pricingUnitKg) {
+      return;
+    }
     final int? priceCentavos = _inventorySavedPrice(fruit);
     final String configuredScaleDeviceId = _scaleBaseUrl.trim();
     final String scaleDeviceId = configuredScaleDeviceId.isEmpty
@@ -3977,7 +4084,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     }
     final int? parsed = _parsePriceInputCentavos(value);
     if (parsed == null) {
-      _toast('Enter a valid price per kg.');
+      _toast(
+        'Enter a valid price per ${_pricingUnitName(_pricingUnitFor(fruit))}.',
+      );
       return false;
     }
     _draftPrices[fruit] = parsed;
@@ -3994,16 +4103,21 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     }
     FocusManager.instance.primaryFocus?.unfocus();
     final int price = _editablePriceFor(fruit);
+    final String pricingUnit = _pricingUnitFor(fruit);
     if (price <= 0) {
-      _toast('Set $fruit price per kg first.');
+      _toast('Set $fruit price per ${_pricingUnitName(pricingUnit)} first.');
       return;
     }
     final LocalFruit? existingFruit = await _database.getManagedFruit(fruit);
     final int oldPrice = existingFruit?.price ?? 0;
+    final String oldPricingUnit = _normalizePricingUnit(
+      existingFruit?.pricingUnit ?? pricingUnit,
+    );
     final bool confirmed = await _confirmSuspiciousPriceChange(
       fruit: fruit,
       oldPrice: oldPrice,
       newPrice: price,
+      pricingUnit: pricingUnit,
     );
     if (!confirmed) {
       return;
@@ -4012,12 +4126,15 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     final bool hasPriceConflict = _priceConflictFruits.contains(fruit);
     if (existingFruit != null &&
         oldPrice == price &&
+        oldPricingUnit == pricingUnit &&
         !existingFruit.dirty &&
         wasConfigured &&
         !hasPriceConflict) {
       _draftPrices.remove(fruit);
       _syncPriceInputController(fruit);
-      _toast('$fruit is already saved at ${money(price)}/kg.');
+      _toast(
+        '$fruit is already saved at ${_priceWithPricingUnit(price, pricingUnit)}.',
+      );
       return;
     }
     final int preservedStock = _stocks[fruit] ?? 0;
@@ -4025,12 +4142,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     await _database.updateFruitInventory(
       name: fruit,
       price: price,
+      pricingUnit: pricingUnit,
       stock: preservedStock,
     );
     await _database.saveSetting(_inventoryPriceConfiguredKey(fruit), '1');
     if (mounted) {
       setState(() {
         _prices[fruit] = price;
+        _pricingUnits[fruit] = pricingUnit;
         _draftPrices.remove(fruit);
         _configuredPriceFruits.add(fruit);
         _priceConflictFruits.remove(fruit);
@@ -4048,7 +4167,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     );
     await _syncFruitToFirebase(fruit);
     await _loadPriceHistoryFromDatabase();
-    _toast('$fruit saved at ${money(price)}/kg. ${signal.label}.');
+    _toast(
+      '$fruit saved at ${_priceWithPricingUnit(price, pricingUnit)}. ${signal.label}.',
+    );
   }
 
   Future<void> _addSelectedFruit() async {
@@ -4066,15 +4187,19 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       return;
     }
 
+    final String pricingUnit = _newPricingUnitForSelectedFruit();
     final int? price = _parsePriceInputCentavos(_newPriceController.text);
     if (price == null || price <= 0) {
-      _toast('Enter the real price per kg first.');
+      _toast(
+        'Enter the real price per ${_pricingUnitName(pricingUnit)} first.',
+      );
       return;
     }
     final bool confirmed = await _confirmSuspiciousPriceChange(
       fruit: fruit,
       oldPrice: 0,
       newPrice: price,
+      pricingUnit: pricingUnit,
     );
     if (!confirmed) {
       return;
@@ -4088,10 +4213,12 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         _managedFruits.add(fruit);
       }
       _prices[fruit] = savedPrice;
+      _pricingUnits[fruit] = pricingUnit;
       _draftPrices.remove(fruit);
       _stocks[fruit] = savedStock;
       _configuredPriceFruits.add(fruit);
       _fruitToAdd = null;
+      _newPricingUnit = _pricingUnitKg;
       _expandedInventoryFruit = fruit;
       _newPriceController.clear();
       _priceConflictFruits.remove(fruit);
@@ -4100,6 +4227,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       name: fruit,
       iconKey: info.icon.codePoint.toString(),
       price: savedPrice,
+      pricingUnit: pricingUnit,
       stock: savedStock,
     );
     await _database.saveSetting(_inventoryPriceConfiguredKey(fruit), '1');
@@ -4131,6 +4259,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       }
       _configuredPriceFruits.remove(fruit);
       _draftPrices.remove(fruit);
+      _pricingUnits.remove(fruit);
     });
     _priceInputControllers.remove(fruit)?.dispose();
     _priceInputFocusNodes.remove(fruit)?.dispose();
@@ -4356,7 +4485,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         return ReportFruit(
           name: fruit,
           pricePerKg: _inventoryPriceIsConfigured(fruit)
-              ? '${money(_prices[fruit] ?? 0)}/kg'
+              ? _priceWithPricingUnit(
+                  _prices[fruit] ?? 0,
+                  _pricingUnitFor(fruit),
+                )
               : 'Unset',
           restockBasis: 'Sales-based',
           status: signal.label,
@@ -4453,10 +4585,17 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       final AiAutomationResult result = await _aiAutomationClient
           .generateForecast(
             inventory: _managedFruits.map((String fruit) {
+              final String pricingUnit = _pricingUnitFor(fruit);
+              final int? savedPrice = _inventorySavedPrice(fruit);
               return <String, Object?>{
                 'name': fruit,
-                'pricePerKgCentavos': _inventorySavedPrice(fruit) ?? 0,
-                'pricePerKgPhp': ((_inventorySavedPrice(fruit) ?? 0) / 100),
+                'priceCentavos': savedPrice ?? 0,
+                'pricePhp': ((savedPrice ?? 0) / 100),
+                if (pricingUnit == _pricingUnitKg)
+                  'pricePerKgCentavos': savedPrice ?? 0,
+                if (pricingUnit == _pricingUnitKg)
+                  'pricePerKgPhp': ((savedPrice ?? 0) / 100),
+                'pricingUnit': pricingUnit,
                 'currency': 'PHP',
                 'priceConfigured': _inventoryPriceIsConfigured(fruit),
                 'restockMode': 'sales_velocity',
@@ -5987,10 +6126,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
   String _workerRequestDetail(LocalWorkerRequest request) {
     final Map<String, Object?> payload = request.requestedData;
-    final String fruit = payload['fruitName'] as String? ?? 'Sale';
-    final int? weightGrams = _intFromCloud(payload['weightGrams']);
-    final int? totalPrice = _intFromCloud(payload['totalPrice']);
-    final String status = _displayStatus(payload['status'] as String? ?? '');
+    final Map<String, Object?> original = request.originalData;
+    Object? field(String key) => payload[key] ?? original[key];
+
+    final String fruit = field('fruitName') as String? ?? 'Sale';
+    final int? weightGrams = _intFromCloud(field('weightGrams'));
+    final int? totalPrice = _intFromCloud(field('totalPrice'));
+    final String status = _displayStatus(field('status') as String? ?? '');
     final String weight = weightGrams == null ? '' : _formatWeight(weightGrams);
     final String price = totalPrice == null ? '' : money(totalPrice);
     return <String>[
@@ -7061,7 +7203,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   }) async {
     final String? ownerUid = _sessionOwnerUid;
     final String? workerUid =
-        _firebaseSyncService.currentUserId ?? _sessionFirebaseUid;
+        _firebaseSyncService.currentUserId ??
+        _sessionFirebaseUid ??
+        _sessionEmail;
     if (!_isWorkerSession ||
         ownerUid == null ||
         ownerUid.isEmpty ||
@@ -7413,19 +7557,29 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
   Future<void> _applyApprovedWorkerRequest(LocalWorkerRequest request) async {
     final Map<String, Object?> payload = request.requestedData;
+    final Map<String, Object?> original = request.originalData;
     if (request.type == 'keep_sale') {
       return;
     }
-    final String? cloudId =
-        payload['cloudId'] as String? ?? request.saleCloudId;
-    final String? fruitName = payload['fruitName'] as String?;
-    final int? weightGrams = _intFromCloud(payload['weightGrams']);
-    final int? unitPrice = _intFromCloud(payload['unitPrice']);
-    final int? totalPrice = _intFromCloud(payload['totalPrice']);
-    final String status = payload['status'] as String? ?? 'sold';
-    final String? soldAtValue = payload['soldAt'] as String?;
-    final DateTime? soldAt = soldAtValue == null
+    Object? field(String key) => payload[key] ?? original[key];
+
+    final String? cloudId = field('cloudId') as String? ?? request.saleCloudId;
+    final LocalSale? existingSale = cloudId == null || cloudId.isEmpty
         ? null
+        : await _database.getSaleByCloudId(cloudId);
+    final String? fruitName =
+        field('fruitName') as String? ?? existingSale?.fruitName;
+    final int? weightGrams =
+        _intFromCloud(field('weightGrams')) ?? existingSale?.weightGrams;
+    final int? unitPrice =
+        _intFromCloud(field('unitPrice')) ?? existingSale?.unitPrice;
+    final int? totalPrice =
+        _intFromCloud(field('totalPrice')) ?? existingSale?.totalPrice;
+    final String status =
+        field('status') as String? ?? existingSale?.status ?? 'sold';
+    final String? soldAtValue = field('soldAt') as String?;
+    final DateTime? soldAt = soldAtValue == null
+        ? existingSale?.soldAt
         : DateTime.tryParse(soldAtValue);
     if (fruitName == null ||
         fruitName.isEmpty ||
@@ -7784,6 +7938,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 child: _InventoryFruitCard(
                   fruit: info,
                   price: _prices[fruit] ?? 0,
+                  pricingUnit: _pricingUnitFor(fruit),
                   priceConfigured: _inventoryPriceIsConfigured(fruit),
                   restockSignal: _restockSignalForFruit(fruit, stats: stats),
                   expanded: expanded,
@@ -7801,6 +7956,11 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   onPriceTyped: (String value) => _setTypedPrice(fruit, value),
                   onPriceDown: () => _adjustPrice(fruit, -100),
                   onPriceUp: () => _adjustPrice(fruit, 100),
+                  onPricingUnitChanged: (String unit) {
+                    setState(() {
+                      _pricingUnits[fruit] = _normalizePricingUnit(unit);
+                    });
+                  },
                   onSave: () => _saveInventoryFruit(fruit),
                 ),
               );
@@ -7845,7 +8005,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Choose the fruits this vendor sells, including Philippine tropical options, then set the price per kg.',
+                  'Choose the fruits this vendor sells, including Philippine tropical options, then set the price by kg or piece.',
                   style: TextStyle(
                     color: AppColors.textSecondary,
                     fontSize: 12,
@@ -8034,7 +8194,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                         ),
                         SizedBox(height: 2),
                         Text(
-                          '${money(change.oldPrice)} -> ${money(change.newPrice)}/kg',
+                          '${_priceWithPricingUnit(change.oldPrice, _pricingUnitFor(change.fruitName))} -> ${_priceWithPricingUnit(change.newPrice, _pricingUnitFor(change.fruitName))}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -8232,7 +8392,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 runSpacing: 10,
                 children: <Widget>[
                   SizedBox(
-                    width: _tileWidth(constraints.maxWidth, wide ? 3 : 1, 10),
+                    width: _tileWidth(constraints.maxWidth, wide ? 4 : 1, 10),
                     child: AppDropdown(
                       value: _fruitToAdd,
                       hint: availableFruits.isEmpty
@@ -8242,15 +8402,22 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       onChanged: _isGuestSession || _isWorkerSession
                           ? null
                           : (String? value) {
-                              setState(() => _fruitToAdd = value);
+                              setState(() {
+                                _fruitToAdd = value;
+                                if (value != null && value.isNotEmpty) {
+                                  _newPricingUnit = _defaultPricingUnitFor(
+                                    value,
+                                  );
+                                }
+                              });
                             },
                     ),
                   ),
                   SizedBox(
-                    width: _tileWidth(constraints.maxWidth, wide ? 3 : 1, 10),
+                    width: _tileWidth(constraints.maxWidth, wide ? 4 : 1, 10),
                     child: AppTextField(
                       controller: _newPriceController,
-                      label: 'Price per kg',
+                      label: 'Price',
                       hint: _isGuestSession || _isWorkerSession
                           ? 'View only'
                           : '90.00',
@@ -8264,7 +8431,26 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     ),
                   ),
                   SizedBox(
-                    width: _tileWidth(constraints.maxWidth, wide ? 3 : 1, 10),
+                    width: _tileWidth(constraints.maxWidth, wide ? 4 : 1, 10),
+                    child: AppDropdown<String>(
+                      value: _normalizePricingUnit(_newPricingUnit),
+                      hint: 'Price unit',
+                      items: _pricingUnitOptions,
+                      itemLabel: _pricingUnitDropdownLabel,
+                      onChanged: _isGuestSession || _isWorkerSession
+                          ? null
+                          : (String? value) {
+                              if (value == null) {
+                                return;
+                              }
+                              setState(() {
+                                _newPricingUnit = _normalizePricingUnit(value);
+                              });
+                            },
+                    ),
+                  ),
+                  SizedBox(
+                    width: _tileWidth(constraints.maxWidth, wide ? 4 : 1, 10),
                     child: PrimaryButton(
                       label: 'Add fruit',
                       icon: Icons.add_rounded,
@@ -12875,6 +13061,7 @@ class _InventoryFruitCard extends StatelessWidget {
   const _InventoryFruitCard({
     required this.fruit,
     required this.price,
+    required this.pricingUnit,
     required this.priceConfigured,
     required this.restockSignal,
     required this.expanded,
@@ -12886,11 +13073,13 @@ class _InventoryFruitCard extends StatelessWidget {
     required this.onPriceTyped,
     required this.onPriceDown,
     required this.onPriceUp,
+    required this.onPricingUnitChanged,
     required this.onSave,
   });
 
   final FruitInfo fruit;
   final int price;
+  final String pricingUnit;
   final bool priceConfigured;
   final _RestockSignal restockSignal;
   final bool expanded;
@@ -12902,6 +13091,7 @@ class _InventoryFruitCard extends StatelessWidget {
   final ValueChanged<String> onPriceTyped;
   final VoidCallback onPriceDown;
   final VoidCallback onPriceUp;
+  final ValueChanged<String> onPricingUnitChanged;
   final VoidCallback onSave;
 
   @override
@@ -12944,8 +13134,8 @@ class _InventoryFruitCard extends StatelessWidget {
                       SizedBox(height: 1),
                       Text(
                         priceConfigured || price > 0
-                            ? '${money(price)}/kg'
-                            : 'Set price per kg',
+                            ? _priceWithPricingUnit(price, pricingUnit)
+                            : _unsetPriceLabelForUnit(pricingUnit),
                         style: TextStyle(
                           color: priceConfigured || price > 0
                               ? AppColors.textSecondary
@@ -13013,24 +13203,60 @@ class _InventoryFruitCard extends StatelessWidget {
                   ),
                 ),
                 SizedBox(height: 9),
-                SmartStepper(
-                  label: 'Enter price / kg',
-                  value: price > 0 ? money(price) : 'Set price',
-                  controller: priceController,
-                  focusNode: priceFocusNode,
-                  hint: '90.00',
-                  enabled: !readOnly,
-                  onChanged: onPriceTyped,
-                  onSubmitted: (_) => onSave(),
-                  textInputAction: TextInputAction.done,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  inputFormatters: <TextInputFormatter>[
-                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
-                  ],
-                  onMinus: readOnly ? null : onPriceDown,
-                  onPlus: readOnly ? null : onPriceUp,
+                LayoutBuilder(
+                  builder: (BuildContext context, BoxConstraints constraints) {
+                    final bool wide = constraints.maxWidth >= 520;
+                    final Widget priceInput = SmartStepper(
+                      label: _priceEntryLabelForUnit(pricingUnit),
+                      value: price > 0 ? money(price) : 'Set price',
+                      controller: priceController,
+                      focusNode: priceFocusNode,
+                      hint: '90.00',
+                      suffixText: '/${_pricingUnitShortName(pricingUnit)}',
+                      enabled: !readOnly,
+                      onChanged: onPriceTyped,
+                      onSubmitted: (_) => onSave(),
+                      textInputAction: TextInputAction.done,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      inputFormatters: <TextInputFormatter>[
+                        FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                      ],
+                      onMinus: readOnly ? null : onPriceDown,
+                      onPlus: readOnly ? null : onPriceUp,
+                    );
+                    final Widget unitSelector = AppDropdown<String>(
+                      value: _normalizePricingUnit(pricingUnit),
+                      items: _pricingUnitOptions,
+                      itemLabel: _pricingUnitDropdownLabel,
+                      onChanged: readOnly
+                          ? null
+                          : (String? value) {
+                              if (value == null) {
+                                return;
+                              }
+                              onPricingUnitChanged(value);
+                            },
+                    );
+                    if (wide) {
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Expanded(flex: 2, child: priceInput),
+                          SizedBox(width: 8),
+                          SizedBox(width: 140, child: unitSelector),
+                        ],
+                      );
+                    }
+                    return Column(
+                      children: <Widget>[
+                        priceInput,
+                        SizedBox(height: 8),
+                        unitSelector,
+                      ],
+                    );
+                  },
                 ),
                 SizedBox(height: 8),
                 if (readOnly)
@@ -13118,6 +13344,7 @@ class SmartStepper extends StatelessWidget {
     this.textInputAction,
     this.keyboardType,
     this.inputFormatters,
+    this.suffixText = '/kg',
   });
 
   final String label;
@@ -13133,6 +13360,7 @@ class SmartStepper extends StatelessWidget {
   final TextInputAction? textInputAction;
   final TextInputType? keyboardType;
   final List<TextInputFormatter>? inputFormatters;
+  final String suffixText;
 
   @override
   Widget build(BuildContext context) {
@@ -13195,7 +13423,7 @@ class SmartStepper extends StatelessWidget {
                         fontWeight: FontWeight.w700,
                       ),
                       prefixText: 'PHP ',
-                      suffixText: '/kg',
+                      suffixText: suffixText,
                       prefixStyle: TextStyle(
                         color: AppColors.textSecondary,
                         fontSize: 13,

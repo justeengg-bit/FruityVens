@@ -65,7 +65,7 @@ class ReportExportService {
             _tableOrEmpty(
               headers: const <String>[
                 'Fruit',
-                'Price/kg',
+                'Price/unit',
                 'Restock basis',
                 'Signal',
               ],
