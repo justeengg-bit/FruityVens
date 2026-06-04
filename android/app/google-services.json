@@ -13,7 +13,20 @@
           "package_name": "com.example.fruityvens_app"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "877154452010-ivsf8esgisb6ka17d13dpk2kbdnsgctn.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.fruityvens_app",
+            "certificate_hash": "a65691190b20b1581a7dcf6fc10a2d5f9d645dd3"
+          }
+        },
+        {
+          "client_id": "877154452010-8t6q3ooftbjdq8clhjbm8k2i3nsj3te0.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyBnQ7Gp-QQuuZgX6zMiDCGlCDAe_pEwUEs"
@@ -21,7 +34,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "877154452010-8t6q3ooftbjdq8clhjbm8k2i3nsj3te0.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }
