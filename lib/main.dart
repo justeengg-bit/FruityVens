@@ -4675,6 +4675,20 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               'period': 'next 7 days',
               'stockTracking': false,
             },
+            transactions: _activeTransactionHistory.map((
+              TransactionData transaction,
+            ) {
+              final double weightKg = _parseKgAmount(transaction.weight);
+              return <String, Object?>{
+                'cloudId': transaction.cloudId,
+                'fruitName': transaction.fruit,
+                'weightKg': weightKg,
+                'weightGrams': (weightKg * 1000).round(),
+                'totalPriceCentavos': _parsePesoAmount(transaction.price),
+                'soldAt': transaction.soldAt?.toIso8601String(),
+                'status': transaction.status,
+              };
+            }).toList(),
             cameraEye: <String, Object?>{
               'enabled': _cameraEyeStatus.connectedToAp,
               'streamReachable': _cameraEyeStatus.streamReachable,
@@ -9449,7 +9463,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       _latestAiForecast?.summary ??
                       (_isGuestSession
                           ? 'Demo forecast preview only.'
-                          : 'Tap the dashboard forecast icon to refresh recommendations.'),
+                          : 'Ready to forecast from current sales data.'),
                   style: TextStyle(
                     color: _latestAiError == null
                         ? AppColors.textSecondary
@@ -9465,6 +9479,18 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   style: TextStyle(color: AppColors.textMuted, fontSize: 11),
                 ),
               ],
+              SizedBox(height: 12),
+              PrimaryButton(
+                label: _forecastGenerating
+                    ? 'Generating forecast'
+                    : 'Generate forecast',
+                icon: Icons.auto_graph_rounded,
+                onPressed: _forecastGenerating
+                    ? null
+                    : () => _generateAiForecast(),
+                busy: _forecastGenerating,
+                expanded: true,
+              ),
             ],
           ),
         ),

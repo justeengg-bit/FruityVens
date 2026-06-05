@@ -3,6 +3,7 @@ import 'dart:developer' as developer;
 
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_ai/firebase_ai.dart';
+import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:http/http.dart' as http;
 
 class AiAutomationResult {
@@ -59,11 +60,14 @@ class AiAutomationClient {
   Future<AiAutomationResult> generateForecast({
     required List<Map<String, Object?>> inventory,
     required Map<String, Object?> salesSnapshot,
+    List<Map<String, Object?>> transactions = const <Map<String, Object?>>[],
     Map<String, Object?>? cameraEye,
   }) async {
     final Map<String, Object?> forecastInput = <String, Object?>{
+      'horizon_days': 7,
       'inventory': inventory,
       'salesSnapshot': salesSnapshot,
+      if (transactions.isNotEmpty) 'transactions': transactions,
       if (cameraEye != null) 'cameraEye': cameraEye,
       'rules': const <String>[
         'Use only the supplied inventory and salesSnapshot values.',
@@ -73,6 +77,12 @@ class AiAutomationClient {
         'If data is limited, say confidence is low and explain what data is missing.',
       ],
     };
+
+    final AiAutomationResult? gradientBoostingForecast =
+        await _tryGradientBoostingForecast(forecastInput);
+    if (gradientBoostingForecast != null) {
+      return gradientBoostingForecast;
+    }
 
     final String prompt =
         '''
@@ -139,6 +149,73 @@ ${jsonEncode(forecastInput)}
       throw AiAutomationException(
         'Firebase AI forecast failed. Details: $error',
       );
+    }
+  }
+
+  Future<AiAutomationResult?> _tryGradientBoostingForecast(
+    Map<String, Object?> forecastInput,
+  ) async {
+    final String? token = await _firebaseIdTokenBestEffort();
+    final List<String> connectionErrors = <String>[];
+
+    for (final String baseUrl in _candidateBaseUrls) {
+      final Uri uri = Uri.parse('$baseUrl/forecast');
+      try {
+        final Map<String, String> headers = <String, String>{
+          'Content-Type': 'application/json',
+          if (token != null) 'Authorization': 'Bearer $token',
+        };
+        final http.Response response = await http
+            .post(uri, headers: headers, body: jsonEncode(forecastInput))
+            .timeout(const Duration(seconds: 25));
+        final Object? decoded = jsonDecode(response.body);
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          final String message = decoded is Map<String, Object?>
+              ? decoded['detail']?.toString() ??
+                    decoded['error']?.toString() ??
+                    'Gradient Boosting forecast failed.'
+              : 'Gradient Boosting forecast failed.';
+          connectionErrors.add('$baseUrl: $message');
+          continue;
+        }
+        if (decoded is! Map<String, Object?>) {
+          connectionErrors.add('$baseUrl: invalid JSON response');
+          continue;
+        }
+        final String summary = decoded['summary'] as String? ?? '';
+        if (summary.trim().isEmpty) {
+          connectionErrors.add('$baseUrl: empty forecast summary');
+          continue;
+        }
+        return AiAutomationResult.fromJson(<String, Object?>{
+          'summary': summary,
+          'model': decoded['model'] as String? ?? 'GradientBoostingRegressor',
+          'source':
+              decoded['source'] as String? ?? 'FruityVens ML Forecast Server',
+        });
+      } catch (error) {
+        connectionErrors.add('$baseUrl: $error');
+      }
+    }
+
+    if (connectionErrors.isNotEmpty) {
+      developer.log(
+        'Gradient Boosting forecast server unavailable: ${connectionErrors.join(' | ')}',
+        name: 'FruityVensAI',
+      );
+    }
+    return null;
+  }
+
+  Future<String?> _firebaseIdTokenBestEffort() async {
+    try {
+      final auth.User? user = auth.FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        return null;
+      }
+      return user.getIdToken();
+    } catch (_) {
+      return null;
     }
   }
 

@@ -62,12 +62,61 @@ Keep Firebase service account keys, App Check debug tokens, database export
 secrets, and private admin SDK files out of GitHub. Also make sure Firebase
 rules only allow each signed-in user to access the data they own.
 
+## Gradient Boosting Forecast Server
+
+FruityVens can use a Python sales-forecasting server before falling back to
+Firebase AI. The server trains a `GradientBoostingRegressor` from transaction
+history and returns predicted restock demand for the next 7 days.
+
+Install the Python dependencies from the project root:
+
+```sh
+pip install -r requirements.txt
+```
+
+For forecast-only testing without the YOLO/Torch stack:
+
+```sh
+pip install fastapi uvicorn firebase-admin scikit-learn pandas numpy joblib
+```
+
+Start the forecast server:
+
+```sh
+uvicorn tool.forecast_server:app --host 0.0.0.0 --port 8787
+```
+
+When running on a USB-connected Android phone, forward the phone's localhost to
+the workstation server:
+
+```sh
+adb reverse tcp:8787 tcp:8787
+```
+
+For a production-like Firebase setup, download a Firebase Admin SDK service
+account JSON, keep it local, and start the server with:
+
+```sh
+FIREBASE_SERVICE_ACCOUNT=firebase-service-account.json \
+uvicorn tool.forecast_server:app --host 0.0.0.0 --port 8787
+```
+
+The Flutter app sends the current Firebase ID token when available. The server
+can verify that token and read:
+
+```text
+users/<uid>/transactions
+```
+
+If the service account is not configured, the app still sends its local
+transaction snapshot so local development forecasting works.
+
 ## AI Automation Proxy
 
 Keep the OpenAI API key in `API-KEY.txt`. Do not add that file to Flutter
 assets or app source.
 
-Start the local AI proxy from the project root:
+The older OpenAI proxy is still available from the project root:
 
 ```sh
 dart run tool/ai_proxy.dart

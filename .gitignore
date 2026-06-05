@@ -6,6 +6,8 @@
 .DS_Store
 API-KEY.txt
 API-KEY-DATA.txt
+firebase-service-account.json
+*-service-account.json
 .env
 .env.*
 .atom/
