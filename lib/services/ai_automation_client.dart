@@ -6,16 +6,47 @@ import 'package:firebase_ai/firebase_ai.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:http/http.dart' as http;
 
+class AiForecastPrediction {
+  const AiForecastPrediction({
+    required this.fruit,
+    required this.predictedKgTomorrow,
+    required this.predictedKgTotal,
+    required this.recommendation,
+    required this.confidence,
+    required this.reason,
+  });
+
+  final String fruit;
+  final double predictedKgTomorrow;
+  final double predictedKgTotal;
+  final String recommendation;
+  final String confidence;
+  final String reason;
+
+  factory AiForecastPrediction.fromJson(Map<String, Object?> json) {
+    return AiForecastPrediction(
+      fruit: json['fruit']?.toString() ?? '',
+      predictedKgTomorrow: _doubleValue(json['predictedKgTomorrow']),
+      predictedKgTotal: _doubleValue(json['predictedKgTotal']),
+      recommendation: json['recommendation']?.toString() ?? '',
+      confidence: json['confidence']?.toString() ?? '',
+      reason: json['reason']?.toString() ?? '',
+    );
+  }
+}
+
 class AiAutomationResult {
   const AiAutomationResult({
     required this.summary,
     required this.model,
     required this.source,
+    this.predictions = const <AiForecastPrediction>[],
   });
 
   final String summary;
   final String model;
   final String source;
+  final List<AiForecastPrediction> predictions;
 
   String get sourceLabel => '$source / $model';
 
@@ -24,8 +55,37 @@ class AiAutomationResult {
       summary: json['summary'] as String? ?? 'AI automation returned no text.',
       model: json['model'] as String? ?? 'unknown model',
       source: json['source'] as String? ?? 'ai',
+      predictions: _predictionList(json['predictions']),
     );
   }
+}
+
+double _doubleValue(Object? value) {
+  if (value is num) {
+    return value.toDouble();
+  }
+  return double.tryParse(value?.toString() ?? '') ?? 0;
+}
+
+List<AiForecastPrediction> _predictionList(Object? value) {
+  if (value is! List<Object?>) {
+    return const <AiForecastPrediction>[];
+  }
+  final List<AiForecastPrediction> predictions = <AiForecastPrediction>[];
+  for (final Object? item in value) {
+    if (item is! Map) {
+      continue;
+    }
+    final Map<String, Object?> json = <String, Object?>{
+      for (final MapEntry<dynamic, dynamic> entry in item.entries)
+        entry.key.toString(): entry.value,
+    };
+    final AiForecastPrediction prediction = AiForecastPrediction.fromJson(json);
+    if (prediction.fruit.isNotEmpty) {
+      predictions.add(prediction);
+    }
+  }
+  return predictions;
 }
 
 class AiAutomationClient {
@@ -192,6 +252,7 @@ ${jsonEncode(forecastInput)}
           'model': decoded['model'] as String? ?? 'GradientBoostingRegressor',
           'source':
               decoded['source'] as String? ?? 'FruityVens ML Forecast Server',
+          'predictions': decoded['predictions'],
         });
       } catch (error) {
         connectionErrors.add('$baseUrl: $error');

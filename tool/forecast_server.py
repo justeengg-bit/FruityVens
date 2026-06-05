@@ -421,7 +421,11 @@ def _predict_horizon(
         forecast_features = featured[featured["date"] == forecast_date]
         for _, row in forecast_features.iterrows():
             fruit = row["fruit"]
-            prediction = float(model.predict([row[FORECAST_FEATURES]])[0])
+            feature_row = pd.DataFrame(
+                [row[FORECAST_FEATURES].to_dict()],
+                columns=FORECAST_FEATURES,
+            ).fillna(0)
+            prediction = float(model.predict(feature_row)[0])
             prediction = max(0, prediction)
             predictions_by_fruit[fruit].append(prediction)
             working = pd.concat(

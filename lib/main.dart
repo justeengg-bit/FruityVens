@@ -4796,6 +4796,12 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   }
 
   List<_ForecastRecommendation> _forecastRecommendations(DashboardStats stats) {
+    final List<_ForecastRecommendation> aiRecommendations =
+        _aiForecastRecommendations();
+    if (aiRecommendations.isNotEmpty) {
+      return aiRecommendations;
+    }
+
     return stats.topFruitRanks.asMap().entries.map((
       MapEntry<int, FruitRank> entry,
     ) {
@@ -4831,6 +4837,52 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         ),
       };
     }).toList();
+  }
+
+  List<_ForecastRecommendation> _aiForecastRecommendations() {
+    final AiAutomationResult? forecast = _latestAiForecast;
+    if (forecast == null || forecast.predictions.isEmpty) {
+      return const <_ForecastRecommendation>[];
+    }
+
+    return forecast.predictions
+        .where((AiForecastPrediction prediction) => prediction.fruit.isNotEmpty)
+        .take(3)
+        .map((AiForecastPrediction prediction) {
+          final String recommendation = prediction.recommendation.trim().isEmpty
+              ? 'Watch'
+              : prediction.recommendation.trim();
+          final String totalLabel = _formatKgValue(prediction.predictedKgTotal);
+          final String tomorrowLabel = _formatKgValue(
+            prediction.predictedKgTomorrow,
+          );
+          final String reason = prediction.reason.trim();
+          return _ForecastRecommendation(
+            fruitName: prediction.fruit,
+            title: '$recommendation ${prediction.fruit}',
+            detail:
+                'Next 7 days: $totalLabel. Tomorrow: $tomorrowLabel.'
+                '${reason.isEmpty ? '' : ' $reason'}',
+            value: totalLabel,
+            note: 'Tomorrow $tomorrowLabel',
+            badge: _forecastPredictionBadge(recommendation),
+          );
+        })
+        .toList();
+  }
+
+  Widget _forecastPredictionBadge(String recommendation) {
+    final String clean = recommendation.toLowerCase();
+    if (clean.contains('heavy')) {
+      return StatusBadge.red('Heavy');
+    }
+    if (clean.contains('medium')) {
+      return StatusBadge.orange('Medium');
+    }
+    if (clean.contains('light')) {
+      return StatusBadge.green('Light');
+    }
+    return StatusBadge.blue('Watch');
   }
 
   String _forecastConnectionMessage(String error) {
