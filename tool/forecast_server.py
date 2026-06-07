@@ -7,6 +7,9 @@ Run from the project root:
 For production-like Firebase reads, set FIREBASE_SERVICE_ACCOUNT to a Firebase
 Admin SDK JSON file. For local development, Flutter can send the transaction
 snapshot directly in the request body.
+
+On Cloud Run, leave FIREBASE_SERVICE_ACCOUNT unset. Firebase Admin uses Google
+Application Default Credentials from the Cloud Run service account.
 """
 
 from __future__ import annotations
@@ -158,7 +161,10 @@ def forecast(
 def _forecast_context(request: ForecastRequest, authorization: str) -> ForecastContext:
     uid = _verified_uid(authorization)
     if uid and _firebase_ready():
-        firebase_rows = _load_firebase_transactions(uid)
+        try:
+            firebase_rows = _load_firebase_transactions(uid)
+        except Exception:
+            firebase_rows = []
         if firebase_rows:
             return ForecastContext(
                 data=pd.DataFrame(firebase_rows),
@@ -181,10 +187,15 @@ def _firebase_ready() -> bool:
         return False
     if firebase_admin._apps:
         return True
-    if not os.path.exists(SERVICE_ACCOUNT_PATH):
+    options = {"databaseURL": DATABASE_URL}
+    try:
+        if os.path.exists(SERVICE_ACCOUNT_PATH):
+            cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
+            firebase_admin.initialize_app(cred, options)
+        else:
+            firebase_admin.initialize_app(options=options)
+    except Exception:
         return False
-    cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
-    firebase_admin.initialize_app(cred, {"databaseURL": DATABASE_URL})
     return True
 
 
@@ -192,6 +203,8 @@ def _verified_uid(authorization: str) -> str | None:
     if not authorization:
         return None
     if not authorization.startswith("Bearer "):
+        if not REQUIRE_FIREBASE_AUTH:
+            return None
         raise HTTPException(status_code=401, detail="Invalid Authorization header.")
     if not _firebase_ready():
         if REQUIRE_FIREBASE_AUTH:
@@ -204,6 +217,8 @@ def _verified_uid(authorization: str) -> str | None:
     try:
         decoded = auth.verify_id_token(token)
     except Exception as error:
+        if not REQUIRE_FIREBASE_AUTH:
+            return None
         raise HTTPException(status_code=401, detail=f"Invalid Firebase token: {error}")
     return decoded["uid"]
 

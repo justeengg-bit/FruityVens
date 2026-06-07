@@ -4812,18 +4812,18 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           fruitName: fruit.name,
           title: 'Heavy restock ${fruit.name}',
           detail:
-              '${fruit.name} leads today with ${fruit.weightLabel} sold across ${fruit.transactions} sales.',
-          value: fruit.weightLabel,
-          note: 'Avg ${fruit.averageWeightLabel}/sale',
+              '${fruit.name} is your strongest seller. Prepare the biggest refill first.',
+          value: 'Heavy',
+          note: 'Top priority',
           badge: StatusBadge.red('Heavy'),
         ),
         2 => _ForecastRecommendation(
           fruitName: fruit.name,
           title: 'Medium restock ${fruit.name}',
           detail:
-              '${fruit.name} is the second strongest seller. Prepare a steady refill for demand.',
-          value: fruit.weightLabel,
-          note: 'Avg ${fruit.averageWeightLabel}/sale',
+              '${fruit.name} is moving well. Prepare a steady refill, but keep it below the top fruit.',
+          value: 'Medium',
+          note: 'Steady refill',
           badge: StatusBadge.orange('Medium'),
         ),
         _ => _ForecastRecommendation(
@@ -4831,8 +4831,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           title: 'Light top-up ${fruit.name}',
           detail:
               '${fruit.name} is moving, but a lighter refill should be enough for the next round.',
-          value: fruit.weightLabel,
-          note: 'Avg ${fruit.averageWeightLabel}/sale',
+          value: 'Light',
+          note: 'Small refill',
           badge: StatusBadge.green('Light'),
         ),
       };
@@ -4852,23 +4852,34 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           final String recommendation = prediction.recommendation.trim().isEmpty
               ? 'Watch'
               : prediction.recommendation.trim();
-          final String totalLabel = _formatKgValue(prediction.predictedKgTotal);
-          final String tomorrowLabel = _formatKgValue(
-            prediction.predictedKgTomorrow,
+          final String simpleDetail = _simpleForecastDetail(
+            recommendation,
+            prediction.fruit,
           );
-          final String reason = prediction.reason.trim();
           return _ForecastRecommendation(
             fruitName: prediction.fruit,
             title: '$recommendation ${prediction.fruit}',
-            detail:
-                'Next 7 days: $totalLabel. Tomorrow: $tomorrowLabel.'
-                '${reason.isEmpty ? '' : ' $reason'}',
-            value: totalLabel,
-            note: 'Tomorrow $tomorrowLabel',
+            detail: simpleDetail,
+            value: recommendation,
+            note: 'Forecast action',
             badge: _forecastPredictionBadge(recommendation),
           );
         })
         .toList();
+  }
+
+  String _simpleForecastDetail(String recommendation, String fruit) {
+    final String clean = recommendation.toLowerCase();
+    if (clean.contains('heavy')) {
+      return '$fruit should be your main refill. Prioritize it before the others.';
+    }
+    if (clean.contains('medium')) {
+      return '$fruit needs a steady refill. Keep enough ready, but do not overstock.';
+    }
+    if (clean.contains('light')) {
+      return '$fruit only needs a small top-up for now.';
+    }
+    return 'Watch $fruit first. Refill only when sales start moving.';
   }
 
   Widget _forecastPredictionBadge(String recommendation) {
@@ -9556,8 +9567,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               Text(
                 forecastChart.hasSales
                     ? (_isGuestSession
-                          ? 'Demo projection from sample sales only.'
-                          : 'Projection from sales activity.')
+                          ? 'Demo projection for ${forecastChart.periodLabel}, from sample sales only.'
+                          : 'Projection for ${forecastChart.periodLabel}, based on sales activity.')
                     : 'No sales yet.',
                 style: TextStyle(
                   color: AppColors.textSecondary,
@@ -9585,7 +9596,11 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               MetricGrid(
                 maxColumns: 3,
                 metrics: <MetricData>[
-                  const MetricData('Forecast period', 'Next 7 days', ''),
+                  MetricData(
+                    'Forecast period',
+                    forecastChart.periodShortLabel,
+                    forecastChart.periodDateLabel,
+                  ),
                   MetricData(
                     'Analyzed',
                     forecastChart.analyzedLabel,
@@ -9692,9 +9707,11 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       1.08,
     ];
     final int observedDayCount = math.max(1, observedDays.length);
+    final DateTime forecastStart = today.add(const Duration(days: 1));
+    final DateTime forecastEnd = forecastStart.add(const Duration(days: 6));
     final List<String> labels = List<String>.generate(7, (int index) {
-      final DateTime forecastDate = now.add(Duration(days: index + 1));
-      return dayNames[forecastDate.weekday - 1];
+      final DateTime forecastDate = forecastStart.add(Duration(days: index));
+      return '${dayNames[forecastDate.weekday - 1]}\n${monthNames[forecastDate.month - 1]} ${forecastDate.day}';
     });
     final List<String> fruitLabels = rankedFruits
         .take(AppColors.chartColors.length)
@@ -9717,6 +9734,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       analyzedCount: analyzedCount,
       lastUpdated: lastUpdated,
       now: now,
+      forecastStart: forecastStart,
+      forecastEnd: forecastEnd,
     );
   }
 
@@ -11193,16 +11212,23 @@ class _ForecastChartData {
     required this.analyzedCount,
     required this.lastUpdated,
     required this.now,
+    required this.forecastStart,
+    required this.forecastEnd,
   });
 
   factory _ForecastChartData.empty() {
+    final DateTime now = DateTime.now();
+    final DateTime today = DateTime(now.year, now.month, now.day);
+    final DateTime forecastStart = today.add(const Duration(days: 1));
     return _ForecastChartData(
       labels: const <String>[],
       fruitLabels: const <String>[],
       series: const <List<num>>[],
       analyzedCount: 0,
       lastUpdated: null,
-      now: DateTime.now(),
+      now: now,
+      forecastStart: forecastStart,
+      forecastEnd: forecastStart.add(const Duration(days: 6)),
     );
   }
 
@@ -11212,6 +11238,8 @@ class _ForecastChartData {
   final int analyzedCount;
   final DateTime? lastUpdated;
   final DateTime now;
+  final DateTime forecastStart;
+  final DateTime forecastEnd;
 
   bool get hasSales =>
       analyzedCount > 0 && fruitLabels.isNotEmpty && series.isNotEmpty;
@@ -11220,6 +11248,14 @@ class _ForecastChartData {
 
   String get analyzedSubtext =>
       analyzedCount == 1 ? 'Transaction' : 'Transactions';
+
+  String get periodShortLabel => 'Next 7 days';
+
+  String get periodDateLabel =>
+      '${_formatDateShort(forecastStart)} - ${_formatDateShort(forecastEnd)}';
+
+  String get periodLabel =>
+      '${_formatDate(forecastStart)} to ${_formatDate(forecastEnd)}';
 
   String get lastUpdatedLabel {
     final DateTime? updated = lastUpdated;
@@ -11523,6 +11559,10 @@ String _formatChartNumber(num value) {
 
 String _formatDate(DateTime date) {
   return '${monthNames[date.month - 1]} ${date.day}, ${date.year}';
+}
+
+String _formatDateShort(DateTime date) {
+  return '${monthNames[date.month - 1]} ${date.day}';
 }
 
 String _formatTime(DateTime date) {

@@ -68,16 +68,13 @@ FruityVens can use a Python sales-forecasting server before falling back to
 Firebase AI. The server trains a `GradientBoostingRegressor` from transaction
 history and returns predicted restock demand for the next 7 days.
 
-Install the Python dependencies from the project root:
+Install the forecast-only Python dependencies from the project root. This avoids
+downloading the larger YOLO/Torch camera stack:
 
 ```sh
-pip install -r requirements.txt
-```
-
-For forecast-only testing without the YOLO/Torch stack:
-
-```sh
-pip install fastapi uvicorn firebase-admin scikit-learn pandas numpy joblib
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-forecast.txt
 ```
 
 Start the forecast server:

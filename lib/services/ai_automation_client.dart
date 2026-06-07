@@ -94,6 +94,10 @@ class AiAutomationClient {
       'FRUITYVENS_AI_MODEL',
       defaultValue: 'gemini-2.5-flash-lite',
     ),
+    this.enableFirebaseAiFallback = const bool.fromEnvironment(
+      'FRUITYVENS_ENABLE_FIREBASE_AI_FALLBACK',
+      defaultValue: false,
+    ),
     this.baseUrls = const String.fromEnvironment(
       'FRUITYVENS_AI_BASE_URL',
       defaultValue: 'http://127.0.0.1:8787,http://192.168.1.9:8787',
@@ -101,6 +105,7 @@ class AiAutomationClient {
   });
 
   final String forecastModel;
+  final bool enableFirebaseAiFallback;
   final String baseUrls;
 
   List<String> get _candidateBaseUrls {
@@ -142,6 +147,11 @@ class AiAutomationClient {
         await _tryGradientBoostingForecast(forecastInput);
     if (gradientBoostingForecast != null) {
       return gradientBoostingForecast;
+    }
+    if (!enableFirebaseAiFallback) {
+      throw const AiAutomationException(
+        'Forecast server unavailable. Start the local forecast server, run adb reverse tcp:8787 tcp:8787, then try Generate forecast again.',
+      );
     }
 
     final String prompt =
