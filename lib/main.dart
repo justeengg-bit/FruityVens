@@ -4880,6 +4880,31 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         .toList();
   }
 
+  String? _forecastCoverageLabel(AiAutomationResult forecast) {
+    final AiForecastCoverage? coverage = forecast.coverage;
+    if (coverage == null || !coverage.hasTransactions) {
+      return null;
+    }
+
+    final String transactionLabel = coverage.transactionCount == 1
+        ? '1 sold transaction'
+        : '${formatNumber(coverage.transactionCount)} sold transactions';
+    final String dayLabel = coverage.observedDays == 1
+        ? '1 sales day'
+        : '${formatNumber(coverage.observedDays)} sales days';
+    final DateTime? start = coverage.dataStart;
+    final DateTime? end = coverage.dataEnd;
+    final String dateLabel = start == null || end == null
+        ? ''
+        : _isSameDay(start, end)
+        ? ' on ${_formatDate(start)}'
+        : ' from ${_formatDateShort(start)} to ${_formatDateShort(end)}';
+    final String fruitLabel = coverage.fruits.isEmpty
+        ? ''
+        : ' across ${formatNumber(coverage.fruits.length)} fruits';
+    return 'Analyzed $transactionLabel over $dayLabel$dateLabel$fruitLabel.';
+  }
+
   String _simpleForecastDetail(String recommendation, String fruit) {
     final String clean = recommendation.toLowerCase();
     if (clean.contains('heavy')) {
@@ -9556,6 +9581,18 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   'Source: ${_latestAiForecast!.sourceLabel}',
                   style: TextStyle(color: AppColors.textMuted, fontSize: 12),
                 ),
+                if (_forecastCoverageLabel(_latestAiForecast!)
+                    case final String coverageLabel) ...<Widget>[
+                  SizedBox(height: 4),
+                  Text(
+                    coverageLabel,
+                    style: TextStyle(
+                      color: AppColors.textMuted,
+                      fontSize: 12,
+                      height: 1.3,
+                    ),
+                  ),
+                ],
               ],
               SizedBox(height: 12),
               PrimaryButton(

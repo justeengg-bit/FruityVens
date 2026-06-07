@@ -35,18 +35,48 @@ class AiForecastPrediction {
   }
 }
 
+class AiForecastCoverage {
+  const AiForecastCoverage({
+    required this.transactionCount,
+    required this.observedDays,
+    this.dataStart,
+    this.dataEnd,
+    this.fruits = const <String>[],
+  });
+
+  final int transactionCount;
+  final int observedDays;
+  final DateTime? dataStart;
+  final DateTime? dataEnd;
+  final List<String> fruits;
+
+  bool get hasTransactions => transactionCount > 0;
+
+  factory AiForecastCoverage.fromJson(Map<String, Object?> json) {
+    return AiForecastCoverage(
+      transactionCount: _intValue(json['transactionCount']),
+      observedDays: _intValue(json['observedDays']),
+      dataStart: _dateValue(json['dataStart']),
+      dataEnd: _dateValue(json['dataEnd']),
+      fruits: _stringListValue(json['fruits']),
+    );
+  }
+}
+
 class AiAutomationResult {
   const AiAutomationResult({
     required this.summary,
     required this.model,
     required this.source,
     this.predictions = const <AiForecastPrediction>[],
+    this.coverage,
   });
 
   final String summary;
   final String model;
   final String source;
   final List<AiForecastPrediction> predictions;
+  final AiForecastCoverage? coverage;
 
   String get sourceLabel => '$source / $model';
 
@@ -56,8 +86,16 @@ class AiAutomationResult {
       model: json['model'] as String? ?? 'unknown model',
       source: json['source'] as String? ?? 'ai',
       predictions: _predictionList(json['predictions']),
+      coverage: _coverageValue(json['dataCoverage']),
     );
   }
+}
+
+int _intValue(Object? value) {
+  if (value is num) {
+    return value.round();
+  }
+  return int.tryParse(value?.toString() ?? '') ?? 0;
 }
 
 double _doubleValue(Object? value) {
@@ -65,6 +103,35 @@ double _doubleValue(Object? value) {
     return value.toDouble();
   }
   return double.tryParse(value?.toString() ?? '') ?? 0;
+}
+
+DateTime? _dateValue(Object? value) {
+  final String text = value?.toString().trim() ?? '';
+  if (text.isEmpty || text == 'null') {
+    return null;
+  }
+  return DateTime.tryParse(text);
+}
+
+List<String> _stringListValue(Object? value) {
+  if (value is! List<Object?>) {
+    return const <String>[];
+  }
+  return value
+      .map((Object? item) => item?.toString().trim() ?? '')
+      .where((String item) => item.isNotEmpty)
+      .toList();
+}
+
+AiForecastCoverage? _coverageValue(Object? value) {
+  if (value is! Map) {
+    return null;
+  }
+  final Map<String, Object?> json = <String, Object?>{
+    for (final MapEntry<dynamic, dynamic> entry in value.entries)
+      entry.key.toString(): entry.value,
+  };
+  return AiForecastCoverage.fromJson(json);
 }
 
 List<AiForecastPrediction> _predictionList(Object? value) {
@@ -263,6 +330,7 @@ ${jsonEncode(forecastInput)}
           'source':
               decoded['source'] as String? ?? 'FruityVens ML Forecast Server',
           'predictions': decoded['predictions'],
+          'dataCoverage': decoded['dataCoverage'],
         });
       } catch (error) {
         connectionErrors.add('$baseUrl: $error');

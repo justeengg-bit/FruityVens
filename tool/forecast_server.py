@@ -112,11 +112,13 @@ def forecast(
 ) -> dict[str, Any]:
     context = _forecast_context(request, authorization)
     transactions = _normalize_transactions(context.data)
+    data_coverage = _data_coverage(transactions)
     if transactions.empty:
         return _empty_response(
             source="Gradient Boosting Regression",
             model="insufficient-data",
             message="No sold transactions are available for forecasting yet.",
+            data_coverage=data_coverage,
         )
 
     daily = _daily_sales_frame(transactions)
@@ -158,6 +160,7 @@ def forecast(
         "dataSource": context.source,
         "horizonDays": request.horizon_days,
         "confidence": confidence,
+        "dataCoverage": data_coverage,
         "predictions": predictions,
     }
 
@@ -248,7 +251,7 @@ def _normalize_transactions(raw: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for item in raw.to_dict(orient="records"):
         status = str(item.get("status", "sold")).strip().lower()
-        if status and status not in {"sold", "sale"}:
+        if status and status not in {"sold", "sale", "done", "completed", "paid"}:
             continue
 
         fruit = _first_text(item, "fruitName", "fruit", "fruitType", "name")
@@ -292,6 +295,27 @@ def _normalize_transactions(raw: pd.DataFrame) -> pd.DataFrame:
         )
 
     return pd.DataFrame(rows)
+
+
+def _data_coverage(transactions: pd.DataFrame) -> dict[str, Any]:
+    if transactions.empty:
+        return {
+            "transactionCount": 0,
+            "observedDays": 0,
+            "dataStart": None,
+            "dataEnd": None,
+            "fruits": [],
+        }
+
+    date_values = transactions["date"]
+    fruits = sorted(transactions["fruit"].dropna().unique())
+    return {
+        "transactionCount": int(len(transactions)),
+        "observedDays": int(date_values.nunique()),
+        "dataStart": date_values.min().isoformat(),
+        "dataEnd": date_values.max().isoformat(),
+        "fruits": fruits,
+    }
 
 
 def _daily_sales_frame(transactions: pd.DataFrame) -> pd.DataFrame:
@@ -575,12 +599,25 @@ def _confidence_label(transaction_count: int, observed_days: int) -> str:
     return "low"
 
 
-def _empty_response(source: str, model: str, message: str) -> dict[str, Any]:
+def _empty_response(
+    source: str,
+    model: str,
+    message: str,
+    data_coverage: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "summary": message,
         "source": source,
         "model": model,
         "confidence": "low",
+        "dataCoverage": data_coverage
+        or {
+            "transactionCount": 0,
+            "observedDays": 0,
+            "dataStart": None,
+            "dataEnd": None,
+            "fruits": [],
+        },
         "predictions": [],
     }
 
