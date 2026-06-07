@@ -48,6 +48,10 @@ REQUIRE_FIREBASE_AUTH = os.getenv(
     "FRUITYVENS_REQUIRE_FIREBASE_AUTH",
     "false",
 ).lower() in {"1", "true", "yes"}
+VERIFY_FIREBASE_AUTH = REQUIRE_FIREBASE_AUTH or os.getenv(
+    "FRUITYVENS_VERIFY_FIREBASE_AUTH",
+    "false",
+).lower() in {"1", "true", "yes"}
 MIN_ML_ROWS = int(os.getenv("FRUITYVENS_FORECAST_MIN_ML_ROWS", "8"))
 LARGE_DATASET_ROWS = int(os.getenv("FRUITYVENS_FORECAST_HIST_ROWS", "10000"))
 FORECAST_FEATURES = [
@@ -200,6 +204,8 @@ def _firebase_ready() -> bool:
 
 
 def _verified_uid(authorization: str) -> str | None:
+    if not VERIFY_FIREBASE_AUTH:
+        return None
     if not authorization:
         return None
     if not authorization.startswith("Bearer "):

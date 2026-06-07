@@ -108,6 +108,107 @@ users/<uid>/transactions
 If the service account is not configured, the app still sends its local
 transaction snapshot so local development forecasting works.
 
+### Render Hosting
+
+Render can host the FastAPI/scikit-learn forecast server so the app can
+forecast without a local terminal server. Free Render web services spin down
+after inactivity, so the first forecast after a quiet period can take about a
+minute to wake up.
+
+Create a new Render Web Service from this repository and use these settings:
+
+```text
+Runtime: Python 3
+Build command: pip install -r requirements-render.txt
+Start command: uvicorn tool.forecast_server:app --host 0.0.0.0 --port $PORT
+```
+
+Use the free instance type for testing. Keep these environment variables unset
+unless you intentionally configure Firebase Admin on the server:
+
+```text
+FRUITYVENS_REQUIRE_FIREBASE_AUTH
+FRUITYVENS_VERIFY_FIREBASE_AUTH
+FIREBASE_SERVICE_ACCOUNT
+```
+
+With those unset, the server forecasts from the transaction payload sent by the
+Flutter app. After Render deploys, check:
+
+```text
+https://YOUR-RENDER-SERVICE.onrender.com/health
+```
+
+Build the Flutter app with the Render URL:
+
+```sh
+flutter build apk --debug \
+  --dart-define=FRUITYVENS_AI_BASE_URL=https://YOUR-RENDER-SERVICE.onrender.com
+```
+
+### PythonAnywhere Hosting
+
+PythonAnywhere can host a lightweight forecast server so the app can forecast
+without a local terminal server. The free account has limited disk and
+restricted outbound internet, so this setup uses a small Flask server and the
+transaction payload sent by the Flutter app instead of the heavier
+scikit-learn/Firebase Admin stack.
+
+In a PythonAnywhere Bash console:
+
+```sh
+mkdir -p FruityVens
+tar -xzf fruityvens-pythonanywhere.tar.gz -C FruityVens
+cd FruityVens
+mkvirtualenv fruityvens-forecast --python=python3.10
+pip install -r requirements-pythonanywhere.txt
+```
+
+Create a manual web app from the PythonAnywhere Web tab:
+
+```text
+Add a new web app -> Manual configuration -> Python 3.10
+```
+
+Set the virtualenv to:
+
+```text
+/home/YOURUSERNAME/.virtualenvs/fruityvens-forecast
+```
+
+Edit the WSGI file and replace its contents with:
+
+```py
+import sys
+
+project_home = "/home/YOURUSERNAME/FruityVens"
+if project_home not in sys.path:
+    sys.path.insert(0, project_home)
+
+from tool.forecast_server_pythonanywhere import app as application
+```
+
+Reload the web app from the Web tab.
+
+Check the server:
+
+```text
+https://YOURUSERNAME.pythonanywhere.com/health
+```
+
+Build the Flutter app with the PythonAnywhere URL:
+
+```sh
+flutter build apk --debug \
+  --dart-define=FRUITYVENS_AI_BASE_URL=https://YOURUSERNAME.pythonanywhere.com
+```
+
+When the server code changes, reload it from PythonAnywhere:
+
+```text
+Web tab -> Reload
+```
+
 ## AI Automation Proxy
 
 Keep the OpenAI API key in `API-KEY.txt`. Do not add that file to Flutter

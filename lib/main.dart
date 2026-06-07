@@ -31,6 +31,7 @@ const String _appCheckDebugToken = String.fromEnvironment(
 );
 const String _pricingUnitKg = 'kg';
 const String _pricingUnitPiece = 'piece';
+const double _appTextScale = 1.06;
 const List<String> _pricingUnitOptions = <String>[
   _pricingUnitKg,
   _pricingUnitPiece,
@@ -164,6 +165,17 @@ class FruityVensApp extends StatelessWidget {
           debugShowCheckedModeBanner: false,
           scaffoldMessengerKey: fruityVensMessengerKey,
           theme: AppColors.materialTheme(lightThemeEnabled),
+          builder: (BuildContext context, Widget? child) {
+            final MediaQueryData mediaQuery = MediaQuery.of(context);
+            return MediaQuery(
+              data: mediaQuery.copyWith(
+                textScaler: TextScaler.linear(
+                  mediaQuery.textScaler.scale(_appTextScale),
+                ),
+              ),
+              child: child ?? const SizedBox.shrink(),
+            );
+          },
           home: child,
         );
       },
@@ -9487,7 +9499,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               Row(
                 children: <Widget>[
                   Expanded(
-                    child: SectionTitle(
+                    child: _ForecastSectionTitle(
                       _isGuestSession ? 'Demo forecast' : 'AI automation',
                     ),
                   ),
@@ -9515,7 +9527,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                         _isGuestSession
                             ? 'Building a local demo forecast from sample sales...'
                             : 'Updating forecast...',
-                        style: TextStyle(color: AppColors.textSecondary),
+                        style: TextStyle(
+                          color: AppColors.textSecondary,
+                          fontSize: 14,
+                        ),
                       ),
                     ),
                   ],
@@ -9531,7 +9546,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     color: _latestAiError == null
                         ? AppColors.textSecondary
                         : AppColors.pinkText,
-                    fontSize: 12,
+                    fontSize: 14,
                     height: 1.45,
                   ),
                 ),
@@ -9539,7 +9554,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 SizedBox(height: 8),
                 Text(
                   'Source: ${_latestAiForecast!.sourceLabel}',
-                  style: TextStyle(color: AppColors.textMuted, fontSize: 11),
+                  style: TextStyle(color: AppColors.textMuted, fontSize: 12),
                 ),
               ],
               SizedBox(height: 12),
@@ -9563,7 +9578,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              const SectionTitle('Projected daily sales'),
+              const _ForecastSectionTitle('Projected daily sales'),
               Text(
                 forecastChart.hasSales
                     ? (_isGuestSession
@@ -9572,7 +9587,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     : 'No sales yet.',
                 style: TextStyle(
                   color: AppColors.textSecondary,
-                  fontSize: 12,
+                  fontSize: 14,
                   height: 1.35,
                 ),
               ),
@@ -9581,6 +9596,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 ChartLegend(
                   labels: forecastChart.fruitLabels,
                   colors: AppColors.chartColors,
+                  fontSize: 14,
                 ),
                 SizedBox(height: 10),
                 StackedBarChart(
@@ -9589,12 +9605,18 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   colors: AppColors.chartColors,
                   valueSuffix: ' kg',
                   showValueLabels: true,
+                  height: 260,
+                  labelFontSize: 12,
+                  valueLabelFontSize: 11,
                 ),
               ] else
                 const _ForecastChartEmptyState(),
               SizedBox(height: 12),
               MetricGrid(
                 maxColumns: 3,
+                labelFontSize: 13,
+                valueFontSize: 23,
+                subtextFontSize: 12,
                 metrics: <MetricData>[
                   MetricData(
                     'Forecast period',
@@ -9622,7 +9644,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              const SectionTitle('What to do next'),
+              const _ForecastSectionTitle('What to do next'),
               if (recommendations.isEmpty)
                 const _ForecastEmptyState()
               else
@@ -12600,6 +12622,23 @@ class SectionTitle extends StatelessWidget {
   }
 }
 
+class _ForecastSectionTitle extends StatelessWidget {
+  const _ForecastSectionTitle(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Text(
+        text,
+        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+      ),
+    );
+  }
+}
+
 class SectionLabel extends StatelessWidget {
   const SectionLabel(this.text, {super.key});
 
@@ -12923,11 +12962,17 @@ class MetricGrid extends StatelessWidget {
     required this.metrics,
     this.maxColumns = 4,
     this.minColumns = 1,
+    this.labelFontSize = 12,
+    this.valueFontSize = 22,
+    this.subtextFontSize = 11,
   });
 
   final List<MetricData> metrics;
   final int maxColumns;
   final int minColumns;
+  final double labelFontSize;
+  final double valueFontSize;
+  final double subtextFontSize;
 
   @override
   Widget build(BuildContext context) {
@@ -12948,7 +12993,12 @@ class MetricGrid extends StatelessWidget {
           children: metrics.map((MetricData metric) {
             return SizedBox(
               width: _tileWidth(constraints.maxWidth, count, 10),
-              child: MetricCard(metric: metric),
+              child: MetricCard(
+                metric: metric,
+                labelFontSize: labelFontSize,
+                valueFontSize: valueFontSize,
+                subtextFontSize: subtextFontSize,
+              ),
             );
           }).toList(),
         );
@@ -12958,9 +13008,18 @@ class MetricGrid extends StatelessWidget {
 }
 
 class MetricCard extends StatelessWidget {
-  const MetricCard({super.key, required this.metric});
+  const MetricCard({
+    super.key,
+    required this.metric,
+    this.labelFontSize = 12,
+    this.valueFontSize = 22,
+    this.subtextFontSize = 11,
+  });
 
   final MetricData metric;
+  final double labelFontSize;
+  final double valueFontSize;
+  final double subtextFontSize;
 
   @override
   Widget build(BuildContext context) {
@@ -12977,7 +13036,10 @@ class MetricCard extends StatelessWidget {
         children: <Widget>[
           Text(
             metric.label,
-            style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+            style: TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: labelFontSize,
+            ),
           ),
           SizedBox(height: 5),
           FittedBox(
@@ -12987,7 +13049,7 @@ class MetricCard extends StatelessWidget {
               metric.value,
               style: TextStyle(
                 color: metric.valueColor ?? AppColors.textPrimary,
-                fontSize: 22,
+                fontSize: valueFontSize,
                 fontWeight: FontWeight.w700,
               ),
             ),
@@ -12996,7 +13058,10 @@ class MetricCard extends StatelessWidget {
             SizedBox(height: 3),
             Text(
               metric.subtext,
-              style: TextStyle(color: AppColors.textMuted, fontSize: 11),
+              style: TextStyle(
+                color: AppColors.textMuted,
+                fontSize: subtextFontSize,
+              ),
             ),
           ],
         ],
@@ -13873,15 +13938,15 @@ class GuidedActionRow extends StatelessWidget {
               children: <Widget>[
                 Text(
                   title,
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
                 ),
-                SizedBox(height: 2),
+                SizedBox(height: 4),
                 Text(
                   detail,
                   style: TextStyle(
                     color: AppColors.textSecondary,
-                    fontSize: 12,
-                    height: 1.3,
+                    fontSize: 14,
+                    height: 1.35,
                   ),
                 ),
               ],
@@ -14340,10 +14405,16 @@ class RestockRow extends StatelessWidget {
 }
 
 class ChartLegend extends StatelessWidget {
-  const ChartLegend({super.key, required this.labels, required this.colors});
+  const ChartLegend({
+    super.key,
+    required this.labels,
+    required this.colors,
+    this.fontSize = 12,
+  });
 
   final List<String> labels;
   final List<Color> colors;
+  final double fontSize;
 
   @override
   Widget build(BuildContext context) {
@@ -14371,7 +14442,10 @@ class ChartLegend extends StatelessWidget {
             SizedBox(width: 5),
             Text(
               labels[index],
-              style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+              style: TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: fontSize,
+              ),
             ),
           ],
         );
@@ -14390,6 +14464,9 @@ class StackedBarChart extends StatelessWidget {
     this.valueSuffix = '',
     this.valueFormatter,
     this.showValueLabels = false,
+    this.height = 230,
+    this.labelFontSize = 10,
+    this.valueLabelFontSize = 9,
   });
 
   final List<String> labels;
@@ -14399,11 +14476,14 @@ class StackedBarChart extends StatelessWidget {
   final String valueSuffix;
   final String Function(num value)? valueFormatter;
   final bool showValueLabels;
+  final double height;
+  final double labelFontSize;
+  final double valueLabelFontSize;
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 230,
+      height: height,
       width: double.infinity,
       child: CustomPaint(
         painter: StackedBarPainter(
@@ -14414,6 +14494,8 @@ class StackedBarChart extends StatelessWidget {
           valueSuffix: valueSuffix,
           valueFormatter: valueFormatter,
           showValueLabels: showValueLabels,
+          labelFontSize: labelFontSize,
+          valueLabelFontSize: valueLabelFontSize,
         ),
       ),
     );
@@ -14429,6 +14511,8 @@ class StackedBarPainter extends CustomPainter {
     required this.valueSuffix,
     required this.valueFormatter,
     required this.showValueLabels,
+    required this.labelFontSize,
+    required this.valueLabelFontSize,
   });
 
   final List<String> labels;
@@ -14438,14 +14522,16 @@ class StackedBarPainter extends CustomPainter {
   final String valueSuffix;
   final String Function(num value)? valueFormatter;
   final bool showValueLabels;
+  final double labelFontSize;
+  final double valueLabelFontSize;
 
   @override
   void paint(Canvas canvas, Size size) {
     if (labels.isEmpty || series.isEmpty) {
       return;
     }
-    final double topPadding = showValueLabels ? 30 : 14;
-    const double bottomPadding = 34;
+    final double topPadding = showValueLabels ? 34 : 14;
+    final double bottomPadding = math.max(34, labelFontSize * 3.4);
     const double leftPadding = 6;
     const double rightPadding = 6;
     final double chartHeight = size.height - topPadding - bottomPadding;
@@ -14514,7 +14600,7 @@ class StackedBarPainter extends CustomPainter {
           Offset(centerX, math.max(2, yCursor - 17)),
           TextStyle(
             color: AppColors.textPrimary,
-            fontSize: 9,
+            fontSize: valueLabelFontSize,
             fontWeight: FontWeight.w800,
           ),
           maxWidth: math.max(barWidth + 14, groupWidth - 2),
@@ -14524,8 +14610,8 @@ class StackedBarPainter extends CustomPainter {
       _drawText(
         canvas,
         labels[index],
-        Offset(centerX, size.height - 18),
-        TextStyle(color: AppColors.textMuted, fontSize: 10),
+        Offset(centerX, size.height - bottomPadding + 5),
+        TextStyle(color: AppColors.textMuted, fontSize: labelFontSize),
       );
     }
 
@@ -14534,7 +14620,7 @@ class StackedBarPainter extends CustomPainter {
         canvas,
         _formatChartValue(maxTotal),
         const Offset(leftPadding, 0),
-        TextStyle(color: AppColors.textMuted, fontSize: 10),
+        TextStyle(color: AppColors.textMuted, fontSize: labelFontSize),
         align: TextAlign.left,
       );
     }
@@ -14592,7 +14678,9 @@ class StackedBarPainter extends CustomPainter {
         oldDelegate.series != series ||
         oldDelegate.valuePrefix != valuePrefix ||
         oldDelegate.valueSuffix != valueSuffix ||
-        oldDelegate.showValueLabels != showValueLabels;
+        oldDelegate.showValueLabels != showValueLabels ||
+        oldDelegate.labelFontSize != labelFontSize ||
+        oldDelegate.valueLabelFontSize != valueLabelFontSize;
   }
 }
 
