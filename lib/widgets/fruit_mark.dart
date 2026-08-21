@@ -100,7 +100,10 @@ class _FruitMarkCatalog {
         fill: Color(0xFFFFF59D),
         accent: Color(0xFF7CB342),
       ),
-      'Mango' || 'Mango Carabao' || 'Indian Mango' => const _FruitMarkSpec(
+      'Mango' ||
+      'Mango Carabao' ||
+      'Indian Mango' ||
+      'Apple Mango' => const _FruitMarkSpec(
         shape: _FruitMarkShape.mango,
         stroke: Color(0xFFFFB300),
         fill: Color(0xFFFFE082),

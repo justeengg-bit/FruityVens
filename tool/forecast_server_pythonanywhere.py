@@ -16,6 +16,7 @@ from flask import Flask, jsonify, request
 
 
 app = Flask(__name__)
+MIN_OBSERVED_SALES_DAYS = 30
 
 
 @app.after_request
@@ -34,6 +35,7 @@ def health():
             "engine": "LightweightTrendForecast",
             "firebaseAdmin": False,
             "requiresFirebaseAuth": False,
+            "minimumObservedSalesDays": MIN_OBSERVED_SALES_DAYS,
         }
     )
 
@@ -57,12 +59,36 @@ def forecast():
                 "dataSource": "request-payload",
                 "horizonDays": horizon_days,
                 "confidence": "low",
+                "dataCoverage": {
+                    "transactionCount": 0,
+                    "observedDays": 0,
+                    "dataStart": None,
+                    "dataEnd": None,
+                    "fruits": [],
+                },
                 "predictions": [],
             }
         )
 
     daily = _daily_sales(transactions)
     observed_days = {item["sold_date"] for item in transactions}
+    data_coverage = _data_coverage(transactions)
+    if len(observed_days) < MIN_OBSERVED_SALES_DAYS:
+        return jsonify(
+            {
+                "summary": (
+                    f"Collecting genuine sales history: {len(observed_days)} of "
+                    f"{MIN_OBSERVED_SALES_DAYS} selling days recorded."
+                ),
+                "source": "FruityVens vendor sales",
+                "model": "collecting-history",
+                "dataSource": "request-payload",
+                "horizonDays": horizon_days,
+                "confidence": "low",
+                "dataCoverage": data_coverage,
+                "predictions": [],
+            }
+        )
     confidence = _confidence_label(len(transactions), len(observed_days))
     predictions = [
         _prediction_for_fruit(fruit, days, horizon_days, confidence)
@@ -78,6 +104,7 @@ def forecast():
             "dataSource": "request-payload",
             "horizonDays": horizon_days,
             "confidence": confidence,
+            "dataCoverage": data_coverage,
             "predictions": predictions,
         }
     )
@@ -151,6 +178,18 @@ def _prediction_for_fruit(
         "recommendation": recommendation,
         "confidence": confidence,
         "reason": _reason(fruit, recommendation, confidence),
+        "dailyPredictions": [round(value, 2) for value in daily_predictions],
+    }
+
+
+def _data_coverage(transactions: list[dict[str, Any]]) -> dict[str, Any]:
+    observed_days = sorted({item["sold_date"] for item in transactions})
+    return {
+        "transactionCount": len(transactions),
+        "observedDays": len(observed_days),
+        "dataStart": observed_days[0].isoformat() if observed_days else None,
+        "dataEnd": observed_days[-1].isoformat() if observed_days else None,
+        "fruits": sorted({item["fruit"] for item in transactions}),
     }
 
 
@@ -238,9 +277,9 @@ def _summary(predictions: list[dict[str, Any]], confidence: str) -> str:
 
 
 def _confidence_label(transaction_count: int, observed_days: int) -> str:
-    if transaction_count >= 50 and observed_days >= 14:
+    if transaction_count >= 500 and observed_days >= 180:
         return "high"
-    if transaction_count >= 15 and observed_days >= 5:
+    if transaction_count >= 100 and observed_days >= 60:
         return "medium"
     return "low"
 

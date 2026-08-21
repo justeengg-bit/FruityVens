@@ -300,6 +300,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Forecasting'), findsOneWidget);
+    expect(find.text('CDO market outlook'), findsOneWidget);
+    expect(find.text('PSA'), findsOneWidget);
     expect(find.text('Demo forecast'), findsOneWidget);
     expect(find.text('Demo forecast preview only.'), findsOneWidget);
     expect(find.text('What to do next'), findsOneWidget);
@@ -359,9 +361,12 @@ void main() {
     await openOperationsMenu(tester);
     await tester.tap(find.text('Inventory'));
     await tester.pumpAndSettle();
-    expect(find.text('PRICES AND RESTOCK SIGNALS'), findsOneWidget);
+    expect(find.text('FRUIT PRICES'), findsOneWidget);
     expect(find.text('Avg price'), findsNothing);
-    expect(find.text('Prices set'), findsOneWidget);
+    expect(find.text('Catalog pricing'), findsNothing);
+    expect(find.text('Prices set'), findsNothing);
+    expect(find.text('Signals'), findsNothing);
+    expect(find.text('Today\'s restock priority'), findsNothing);
     expect(find.textContaining('Set price'), findsWidgets);
 
     await tester.tap(find.byTooltip('Back'));
@@ -370,7 +375,18 @@ void main() {
     await tester.tap(find.text('Generate forecast'));
     await tester.pumpAndSettle();
     expect(find.text('Forecasting'), findsOneWidget);
-    expect(find.text('No sales yet.'), findsOneWidget);
+    expect(find.text('CDO market outlook'), findsOneWidget);
+    expect(find.text('Vendor demand forecast'), findsOneWidget);
+    expect(find.text('Collecting'), findsOneWidget);
+    expect(
+      find.textContaining('0 of 30 selling days recorded'),
+      findsOneWidget,
+    );
+    expect(find.text('Collecting sales history'), findsOneWidget);
+    expect(
+      find.text('Daily projections unlock after 30 genuine selling days.'),
+      findsWidgets,
+    );
     expect(find.text('1,248'), findsNothing);
 
     await tester.tap(find.byTooltip('Back'));
@@ -783,9 +799,24 @@ void main() {
 
     await tester.tap(find.byType(DropdownButtonFormField<String>).first);
     await tester.pumpAndSettle();
+    expect(find.text('Apple Mango'), findsOneWidget);
     expect(find.text('Lemon'), findsOneWidget);
     expect(find.text('Papaya'), findsOneWidget);
     expect(find.text('Watermelon'), findsOneWidget);
+    for (final String removedFruit in <String>[
+      'Guava',
+      'Coconut',
+      'Dalandan',
+      'Chico',
+      'Atis',
+      'Santol',
+      'Star Apple',
+      'Jackfruit',
+      'Tamarind',
+      'Langkatan',
+    ]) {
+      expect(find.text(removedFruit), findsNothing);
+    }
     await tester.tap(find.text('Lemon'));
     await tester.pumpAndSettle();
 

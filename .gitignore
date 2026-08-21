@@ -39,6 +39,7 @@ run_logs/
 .pub/
 /build/
 /coverage/
+.pio/
 models/**/__pycache__/
 
 # Symbolication related

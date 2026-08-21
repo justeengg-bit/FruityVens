@@ -14,6 +14,7 @@ class AiForecastPrediction {
     required this.recommendation,
     required this.confidence,
     required this.reason,
+    this.dailyPredictions = const <double>[],
   });
 
   final String fruit;
@@ -22,6 +23,7 @@ class AiForecastPrediction {
   final String recommendation;
   final String confidence;
   final String reason;
+  final List<double> dailyPredictions;
 
   factory AiForecastPrediction.fromJson(Map<String, Object?> json) {
     return AiForecastPrediction(
@@ -31,6 +33,7 @@ class AiForecastPrediction {
       recommendation: json['recommendation']?.toString() ?? '',
       confidence: json['confidence']?.toString() ?? '',
       reason: json['reason']?.toString() ?? '',
+      dailyPredictions: _doubleListValue(json['dailyPredictions']),
     );
   }
 }
@@ -121,6 +124,13 @@ List<String> _stringListValue(Object? value) {
       .map((Object? item) => item?.toString().trim() ?? '')
       .where((String item) => item.isNotEmpty)
       .toList();
+}
+
+List<double> _doubleListValue(Object? value) {
+  if (value is! List<Object?>) {
+    return const <double>[];
+  }
+  return value.map(_doubleValue).toList();
 }
 
 AiForecastCoverage? _coverageValue(Object? value) {

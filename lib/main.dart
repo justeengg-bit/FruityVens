@@ -20,6 +20,7 @@ import 'firebase_options.dart';
 import 'services/ai_automation_client.dart';
 import 'services/camera_eye_service.dart';
 import 'services/firebase_sync_service.dart';
+import 'services/market_outlook_service.dart';
 import 'services/report_export_service.dart';
 import 'services/scale_log_service.dart';
 import 'widgets/fruit_mark.dart';
@@ -235,6 +236,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     defaultValue: 'fruityvens-scale-01',
   );
   static const Duration _scaleLogAutoPollInterval = Duration(seconds: 15);
+  static const int _minimumVendorForecastDays = 30;
   static const String _googleServerClientId = String.fromEnvironment(
     'FRUITYVENS_GOOGLE_SERVER_CLIENT_ID',
   );
@@ -250,6 +252,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   final AiAutomationClient _aiAutomationClient = const AiAutomationClient();
   final CameraEyeService _cameraEyeService = const CameraEyeService();
   final FirebaseSyncService _firebaseSyncService = const FirebaseSyncService();
+  final MarketOutlookService _marketOutlookService =
+      const MarketOutlookService();
   final ReportExportService _reportExportService = const ReportExportService();
   final ScaleLogService _scaleLogService = const ScaleLogService();
   final LocalAuthentication _localAuth = LocalAuthentication();
@@ -290,6 +294,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   bool _creatingWorkerAccount = false;
   bool _resetSent = false;
   bool _forecastGenerating = false;
+  bool _marketOutlookLoading = false;
+  bool _showAllMarketOutlooks = false;
   bool _exportingReport = false;
   bool _cameraEyeBusy = false;
   bool _phoneLinkEnabled = false;
@@ -324,6 +330,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   CameraEyeStatus _cameraEyeStatus = const CameraEyeStatus.idle();
   AiAutomationResult? _latestAiForecast;
   String? _latestAiError;
+  MarketOutlookDataset? _marketOutlookDataset;
+  String? _marketOutlookError;
   bool _inventoryLoading = true;
   bool _cloudSyncRunning = false;
   bool _splashMounted = true;
@@ -586,6 +594,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     'Guyabano': FruitInfo('Guyabano', Icons.eco_rounded, 100, 8),
     'Mango Carabao': FruitInfo('Mango Carabao', Icons.spa_rounded, 80, 14),
     'Indian Mango': FruitInfo('Indian Mango', Icons.spa_rounded, 75, 12),
+    'Apple Mango': FruitInfo('Apple Mango', Icons.spa_rounded, 85, 12),
     'Langkatan': FruitInfo('Langkatan', Icons.rice_bowl_rounded, 45, 9),
     'Pear': FruitInfo('Pear', Icons.local_florist_rounded, 95, 11),
     'Strawberries': FruitInfo('Strawberries', Icons.favorite_rounded, 120, 8),
@@ -605,26 +614,17 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     'Pineapple',
     'Calamansi',
     'Pomelo',
-    'Guava',
     'Avocado',
-    'Coconut',
-    'Dalandan',
     'Dragon Fruit',
     'Durian',
     'Mangosteen',
     'Rambutan',
     'Lanzones',
-    'Chico',
-    'Atis',
-    'Santol',
-    'Star Apple',
-    'Jackfruit',
-    'Tamarind',
     'Melon',
     'Guyabano',
     'Mango Carabao',
     'Indian Mango',
-    'Langkatan',
+    'Apple Mango',
     'Pear',
     'Strawberries',
   ];
@@ -1838,6 +1838,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     switch (fruit) {
       case 'Mango Carabao':
       case 'Indian Mango':
+      case 'Apple Mango':
         return 'Mango';
       case 'Strawberry':
         return 'Strawberries';
@@ -2479,6 +2480,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _operationsOpen = false;
       _lastBackGestureAt = null;
     });
+    if (screen == AppScreen.forecast) {
+      unawaited(_loadMarketOutlook());
+    }
   }
 
   Future<void> _completeWalkthrough({bool startGuest = false}) async {
@@ -4636,12 +4640,107 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     }).toList();
   }
 
+  Future<void> _loadMarketOutlook() async {
+    if (_marketOutlookLoading || _marketOutlookDataset != null) {
+      return;
+    }
+    setState(() {
+      _marketOutlookLoading = true;
+      _marketOutlookError = null;
+    });
+    try {
+      final MarketOutlookDataset dataset = await _marketOutlookService.load(
+        _database,
+        fruitNames: _scanReadyFruitOrder,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _marketOutlookLoading = false;
+        _marketOutlookDataset = dataset;
+        _marketOutlookError = null;
+      });
+    } catch (error, stackTrace) {
+      developer.log(
+        'PSA market outlook failed to load',
+        name: 'FruityVensMarketOutlook',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _marketOutlookLoading = false;
+        _marketOutlookError =
+            'Official market history is unavailable on this installation.';
+      });
+    }
+  }
+
+  int get _observedVendorSalesDays {
+    final Set<String> observedDates = <String>{};
+    for (final TransactionData transaction in _realTransactionHistory) {
+      final DateTime? soldAt = transaction.soldAt;
+      if (!_isSoldTransaction(transaction) || soldAt == null) {
+        continue;
+      }
+      observedDates.add('${soldAt.year}-${soldAt.month}-${soldAt.day}');
+    }
+    return observedDates.length;
+  }
+
+  int get _soldVendorTransactionCount {
+    return _realTransactionHistory.where(_isSoldTransaction).length;
+  }
+
+  bool get _vendorForecastReady {
+    return _isGuestSession ||
+        _observedVendorSalesDays >= _minimumVendorForecastDays;
+  }
+
+  List<FruitMarketOutlook> get _orderedMarketOutlooks {
+    final List<FruitMarketOutlook> outlooks = List<FruitMarketOutlook>.of(
+      _marketOutlookDataset?.outlooks ?? const <FruitMarketOutlook>[],
+    );
+    outlooks.sort((FruitMarketOutlook a, FruitMarketOutlook b) {
+      final int indexA = _scanReadyFruitOrder.indexOf(a.fruitName);
+      final int indexB = _scanReadyFruitOrder.indexOf(b.fruitName);
+      final int normalizedA = indexA < 0 ? 999 : indexA;
+      final int normalizedB = indexB < 0 ? 999 : indexB;
+      return normalizedA.compareTo(normalizedB);
+    });
+    return outlooks;
+  }
+
+  List<FruitMarketOutlook> get _visibleMarketOutlooks {
+    final List<FruitMarketOutlook> outlooks = _orderedMarketOutlooks;
+    if (_showAllMarketOutlooks) {
+      return outlooks;
+    }
+    final List<FruitMarketOutlook> managed = outlooks
+        .where(
+          (FruitMarketOutlook outlook) =>
+              _managedFruits.contains(outlook.fruitName),
+        )
+        .take(6)
+        .toList();
+    return managed.isNotEmpty ? managed : outlooks.take(6).toList();
+  }
+
   Future<void> _generateAiForecast({bool quickAction = false}) async {
     if (_isGuestSession) {
       _generateDemoForecast(quickAction: quickAction);
       return;
     }
     if (_forecastGenerating) {
+      return;
+    }
+    if (!_vendorForecastReady) {
+      _toast(
+        'Collect at least $_minimumVendorForecastDays selling days before generating a vendor demand forecast.',
+      );
       return;
     }
 
@@ -4812,6 +4911,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         _aiForecastRecommendations();
     if (aiRecommendations.isNotEmpty) {
       return aiRecommendations;
+    }
+    if (!_isGuestSession &&
+        (!_vendorForecastReady || _latestAiForecast == null)) {
+      return const <_ForecastRecommendation>[];
     }
 
     return stats.topFruitRanks.asMap().entries.map((
@@ -5833,8 +5936,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 ),
               ),
               SizedBox(height: 12),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+              Wrap(
+                alignment: WrapAlignment.center,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: <Widget>[
                   Text(
                     'Already have an account?',
@@ -6356,7 +6460,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             _operationMenuAction(
               icon: Icons.inventory_2_rounded,
               title: 'Inventory',
-              description: 'Fruits, prices, and restock signals',
+              description: 'Active fruits and selling prices',
               onTap: () => _show(AppScreen.inventory),
             ),
             if (!_isWorkerSession)
@@ -7500,6 +7604,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     String selectedFruit = _catalog.containsKey(sale.fruitName)
         ? sale.fruitName
         : _scanReadyFruitOrder.first;
+    final List<String> editFruitChoices = <String>[
+      if (!_scanReadyFruitOrder.contains(selectedFruit)) selectedFruit,
+      ..._scanReadyFruitOrder,
+    ];
     String selectedStatus = _displayStatus(sale.status) == 'Removed'
         ? 'Removed'
         : 'Sold';
@@ -7600,7 +7708,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     children: <Widget>[
                       AppDropdown(
                         value: selectedFruit,
-                        items: _scanReadyFruitOrder,
+                        items: editFruitChoices,
                         onChanged: (String? value) {
                           if (value == null) {
                             return;
@@ -8244,19 +8352,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   }
 
   Widget _inventoryScreen() {
-    final DashboardStats stats = _dashboardStats();
-    final int configuredPriceCount = _managedFruits
-        .where(_inventoryPriceIsConfigured)
-        .length;
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        _inventoryHeader(
-          stats: stats,
-          configuredPriceCount: configuredPriceCount,
-        ),
-        SizedBox(height: 10),
         if (_isGuestSession) ...<Widget>[
           _demoInventoryNotice(),
           SizedBox(height: 10),
@@ -8287,8 +8385,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           ),
           SizedBox(height: 12),
         ],
-        _inventoryRestockPanel(stats),
-        SizedBox(height: 12),
         if (_priceConflictNotice != null && !_isGuestSession) ...<Widget>[
           _priceConflictBanner(),
           SizedBox(height: 12),
@@ -8299,7 +8395,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         ],
         Row(
           children: <Widget>[
-            Expanded(child: SectionLabel('Prices and restock signals')),
+            Expanded(child: SectionLabel('Fruit prices')),
             StatusBadge.blue('${_managedFruits.length} active'),
           ],
         ),
@@ -8322,7 +8418,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   price: _prices[fruit] ?? 0,
                   pricingUnit: _pricingUnitFor(fruit),
                   priceConfigured: _inventoryPriceIsConfigured(fruit),
-                  restockSignal: _restockSignalForFruit(fruit, stats: stats),
                   expanded: expanded,
                   readOnly: _isGuestSession || _isWorkerSession,
                   readOnlyLabel: _isWorkerSession
@@ -8618,142 +8713,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     );
   }
 
-  Widget _inventoryHeader({
-    required DashboardStats stats,
-    required int configuredPriceCount,
-  }) {
-    final FruitRank? leader = stats.topFruitRanks.isEmpty
-        ? null
-        : stats.topFruitRanks.first;
-    return AppCard(
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: AppColors.palm.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(
-                  Icons.inventory_2_rounded,
-                  color: AppColors.greenText,
-                  size: 22,
-                ),
-              ),
-              SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      'Catalog pricing',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    SizedBox(height: 4),
-                    Text(
-                      leader == null
-                          ? 'No restock leader yet'
-                          : '${leader.name} leads today',
-                      style: TextStyle(
-                        color: AppColors.textSecondary,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              leader == null
-                  ? StatusBadge.orange('Waiting')
-                  : StatusBadge.red('Heavy'),
-            ],
-          ),
-          SizedBox(height: 12),
-          LayoutBuilder(
-            builder: (BuildContext context, BoxConstraints constraints) {
-              final bool wide = constraints.maxWidth >= 620;
-              return Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: <Widget>[
-                  _inventoryMetricTile(
-                    width: _tileWidth(constraints.maxWidth, wide ? 3 : 1, 8),
-                    icon: Icons.shopping_basket_rounded,
-                    label: 'Active fruits',
-                    value:
-                        '${_managedFruits.length}/${_scanReadyFruitOrder.length}',
-                  ),
-                  _inventoryMetricTile(
-                    width: _tileWidth(constraints.maxWidth, wide ? 3 : 1, 8),
-                    icon: Icons.sell_rounded,
-                    label: 'Prices set',
-                    value: '$configuredPriceCount/${_managedFruits.length}',
-                  ),
-                  _inventoryMetricTile(
-                    width: _tileWidth(constraints.maxWidth, wide ? 3 : 1, 8),
-                    icon: Icons.trending_up_rounded,
-                    label: 'Signals',
-                    value: stats.topFruitRanks.isEmpty
-                        ? 'None'
-                        : '${stats.topFruitRanks.length}',
-                  ),
-                ],
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _inventoryMetricTile({
-    required double width,
-    required IconData icon,
-    required String label,
-    required String value,
-  }) {
-    return SizedBox(
-      width: width,
-      child: Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: AppColors.bgSurface,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: AppColors.borderSoft, width: 0.5),
-        ),
-        child: Row(
-          children: <Widget>[
-            Icon(icon, color: AppColors.orangeText, size: 18),
-            SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: AppColors.textSecondary,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-            Text(
-              value,
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _inventoryCatalogManager(List<String> availableFruits) {
     return AppCard(
       padding: const EdgeInsets.all(14),
@@ -8864,99 +8823,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               );
             }).toList(),
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _inventoryRestockPanel(DashboardStats stats) {
-    return AppCard(
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              Expanded(child: SectionTitle('Today\'s restock priority')),
-              stats.topFruitRanks.isEmpty
-                  ? StatusBadge.orange('No signal')
-                  : StatusBadge.green('${stats.topFruitRanks.length} ranked'),
-            ],
-          ),
-          if (stats.topFruitRanks.isEmpty)
-            const _InventoryEmptySignal()
-          else
-            ...stats.topFruitRanks.asMap().entries.map((
-              MapEntry<int, FruitRank> entry,
-            ) {
-              return _inventoryRestockRow(entry.value, entry.key + 1);
-            }),
-        ],
-      ),
-    );
-  }
-
-  Widget _inventoryRestockRow(FruitRank rank, int position) {
-    final _RestockSignal signal = _restockSignalForRankIndex(position - 1);
-    final Color rankColor = switch (position) {
-      1 => const Color(0xFFFFD54F),
-      2 => const Color(0xFFB0BEC5),
-      _ => const Color(0xFFD08A4E),
-    };
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: AppColors.borderSoft, width: 0.5),
-        ),
-      ),
-      child: Row(
-        children: <Widget>[
-          Container(
-            width: 30,
-            height: 30,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: rankColor.withValues(alpha: 0.16),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              '$position',
-              style: TextStyle(
-                color: rankColor,
-                fontSize: 13,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-          ),
-          SizedBox(width: 9),
-          FruitMark(name: rank.name, size: 24),
-          SizedBox(width: 9),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  rank.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900),
-                ),
-                SizedBox(height: 2),
-                Text(
-                  '${rank.transactions} sales - ${_formatKgValue(rank.weightKg)} - ${money(rank.revenuePhp)}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: AppColors.textSecondary,
-                    fontSize: 11,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          SizedBox(width: 8),
-          signal.badge,
         ],
       ),
     );
@@ -9507,6 +9373,146 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     );
   }
 
+  Widget _marketOutlookCard() {
+    final MarketOutlookDataset? dataset = _marketOutlookDataset;
+    final List<FruitMarketOutlook> visibleOutlooks = _visibleMarketOutlooks;
+    final int totalOutlooks = _orderedMarketOutlooks.length;
+    return AppCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              const Expanded(
+                child: _ForecastSectionTitle('CDO market outlook'),
+              ),
+              StatusBadge.blue('PSA'),
+            ],
+          ),
+          Text(
+            'PSA history: prices through Dec 2025 - production through Q4 2025',
+            style: TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 13,
+              height: 1.35,
+            ),
+          ),
+          SizedBox(height: 10),
+          if (_marketOutlookLoading)
+            const _MarketOutlookLoadingState()
+          else if (_marketOutlookError != null)
+            _MarketOutlookErrorState(
+              message: _marketOutlookError!,
+              onRetry: () {
+                setState(() {
+                  _marketOutlookDataset = null;
+                });
+                unawaited(_loadMarketOutlook());
+              },
+            )
+          else if (dataset == null || visibleOutlooks.isEmpty)
+            const _MarketOutlookLoadingState()
+          else ...<Widget>[
+            ...visibleOutlooks.map((FruitMarketOutlook outlook) {
+              return _MarketOutlookRow(
+                fruitName: outlook.fruitName,
+                priceText: _marketPriceText(outlook.price),
+                supplyText: _marketSupplyText(outlook.supply),
+                sourceText: _marketSourceText(outlook),
+                badge: _marketOutlookBadge(outlook),
+              );
+            }),
+            SizedBox(height: 8),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    '${formatNumber(dataset.recordCount)} official records - ${dataset.location}',
+                    style: TextStyle(
+                      color: AppColors.textMuted,
+                      fontSize: 11,
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+                if (totalOutlooks > 6)
+                  TextButton.icon(
+                    onPressed: () {
+                      setState(() {
+                        _showAllMarketOutlooks = !_showAllMarketOutlooks;
+                      });
+                    },
+                    icon: Icon(
+                      _showAllMarketOutlooks
+                          ? Icons.expand_less_rounded
+                          : Icons.expand_more_rounded,
+                      size: 18,
+                    ),
+                    label: Text(
+                      _showAllMarketOutlooks ? 'Show less' : 'Show all',
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String? _marketPriceText(MarketSignal? signal) {
+    if (signal == null) {
+      return null;
+    }
+    final String variant = signal.variant.trim().isEmpty
+        ? ''
+        : ' - ${signal.variant}';
+    final String fallback = signal.usesCategoryFallback
+        ? ' - general mango context'
+        : '';
+    final DateTime period = signal.forecastPeriod;
+    final String periodLabel = '${monthNames[period.month - 1]} ${period.year}';
+    return '$periodLabel price estimate: PHP ${signal.forecastValue.toStringAsFixed(2)}/kg$variant$fallback';
+  }
+
+  String? _marketSupplyText(MarketSignal? signal) {
+    if (signal == null) {
+      return null;
+    }
+    final String fallback = signal.usesCategoryFallback
+        ? ' - general mango context'
+        : '';
+    final DateTime period = signal.forecastPeriod;
+    final int quarter = ((period.month - 1) ~/ 3) + 1;
+    return 'Q$quarter ${period.year} supply estimate: ${signal.direction.label}$fallback';
+  }
+
+  String _marketSourceText(FruitMarketOutlook outlook) {
+    final MarketSignal primary = outlook.price ?? outlook.supply!;
+    final String errorLabel = primary.validationWape.isFinite
+        ? '${(primary.validationWape * 100).round()}% validation error'
+        : 'limited validation';
+    return '${primary.geography} - ${primary.observationCount} observations - $errorLabel';
+  }
+
+  Widget _marketOutlookBadge(FruitMarketOutlook outlook) {
+    final MarketSignal? price = outlook.price;
+    if (price != null) {
+      return switch (price.direction) {
+        MarketDirection.increasing => StatusBadge.red('Price up'),
+        MarketDirection.stable => StatusBadge.blue('Stable'),
+        MarketDirection.decreasing => StatusBadge.green('Price down'),
+      };
+    }
+    final MarketDirection direction = outlook.supply!.direction;
+    return switch (direction) {
+      MarketDirection.increasing => StatusBadge.green('Supply up'),
+      MarketDirection.stable => StatusBadge.blue('Stable'),
+      MarketDirection.decreasing => StatusBadge.orange('Supply down'),
+    };
+  }
+
   Widget _forecastScreen() {
     final DashboardStats stats = _dashboardStats();
     final List<_ForecastRecommendation> recommendations =
@@ -9516,6 +9522,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
+        _marketOutlookCard(),
+        SizedBox(height: 12),
         AppCard(
           padding: const EdgeInsets.all(14),
           child: Column(
@@ -9525,11 +9533,15 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 children: <Widget>[
                   Expanded(
                     child: _ForecastSectionTitle(
-                      _isGuestSession ? 'Demo forecast' : 'AI automation',
+                      _isGuestSession
+                          ? 'Demo forecast'
+                          : 'Vendor demand forecast',
                     ),
                   ),
                   _isGuestSession
                       ? StatusBadge.blue('Demo')
+                      : !_vendorForecastReady
+                      ? StatusBadge.blue('Collecting')
                       : _latestAiError == null
                       ? StatusBadge.green('Ready')
                       : StatusBadge.orange('Check AI'),
@@ -9566,6 +9578,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       _latestAiForecast?.summary ??
                       (_isGuestSession
                           ? 'Demo forecast preview only.'
+                          : !_vendorForecastReady
+                          ? 'Collecting genuine sales history: $_observedVendorSalesDays of $_minimumVendorForecastDays selling days recorded.'
                           : 'Ready to forecast from current sales data.'),
                   style: TextStyle(
                     color: _latestAiError == null
@@ -9596,11 +9610,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               ],
               SizedBox(height: 12),
               PrimaryButton(
-                label: _forecastGenerating
+                label: !_vendorForecastReady
+                    ? 'Collecting sales history'
+                    : _forecastGenerating
                     ? 'Generating forecast'
                     : 'Generate forecast',
                 icon: Icons.auto_graph_rounded,
-                onPressed: _forecastGenerating
+                onPressed: _forecastGenerating || !_vendorForecastReady
                     ? null
                     : () => _generateAiForecast(),
                 busy: _forecastGenerating,
@@ -9620,8 +9636,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 forecastChart.hasSales
                     ? (_isGuestSession
                           ? 'Demo projection for ${forecastChart.periodLabel}, from sample sales only.'
-                          : 'Projection for ${forecastChart.periodLabel}, based on sales activity.')
-                    : 'No sales yet.',
+                          : 'Model projection for ${forecastChart.periodLabel}, based on genuine sales history.')
+                    : _forecastChartEmptyMessage(),
                 style: TextStyle(
                   color: AppColors.textSecondary,
                   fontSize: 14,
@@ -9647,7 +9663,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   valueLabelFontSize: 11,
                 ),
               ] else
-                const _ForecastChartEmptyState(),
+                _ForecastChartEmptyState(message: _forecastChartEmptyMessage()),
               SizedBox(height: 12),
               MetricGrid(
                 maxColumns: 3,
@@ -9683,7 +9699,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             children: <Widget>[
               const _ForecastSectionTitle('What to do next'),
               if (recommendations.isEmpty)
-                const _ForecastEmptyState()
+                _ForecastEmptyState(message: _vendorActionEmptyMessage())
               else
                 ...recommendations.map((_ForecastRecommendation item) {
                   return GuidedActionRow(
@@ -9700,10 +9716,90 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     );
   }
 
+  String _forecastChartEmptyMessage() {
+    if (_isGuestSession) {
+      return 'No demo sales to project yet.';
+    }
+    if (!_vendorForecastReady) {
+      return 'Daily projections unlock after $_minimumVendorForecastDays genuine selling days.';
+    }
+    if (_latestAiForecast == null) {
+      return 'Generate a vendor forecast to view daily projections.';
+    }
+    return 'The latest model returned no daily projection.';
+  }
+
+  String _vendorActionEmptyMessage() {
+    if (_isGuestSession) {
+      return 'No demo sales pattern yet.';
+    }
+    if (!_vendorForecastReady) {
+      return 'Actions unlock after $_minimumVendorForecastDays genuine selling days.';
+    }
+    return 'Generate a vendor forecast to view demand actions.';
+  }
+
   _ForecastChartData _forecastChartData() {
     final DateTime now = DateTime.now();
     final DateTime today = DateTime(now.year, now.month, now.day);
-    final DateTime periodStart = today.subtract(const Duration(days: 6));
+    final DateTime forecastStart = today.add(const Duration(days: 1));
+
+    if (!_isGuestSession) {
+      final AiAutomationResult? forecast = _latestAiForecast;
+      final List<AiForecastPrediction> predictions =
+          (forecast?.predictions ?? const <AiForecastPrediction>[])
+              .where(
+                (AiForecastPrediction prediction) =>
+                    prediction.fruit.isNotEmpty &&
+                    prediction.dailyPredictions.isNotEmpty,
+              )
+              .take(AppColors.chartColors.length)
+              .toList();
+      if (predictions.isEmpty) {
+        return _ForecastChartData.empty();
+      }
+      final int horizon = math.min(
+        7,
+        predictions
+            .map(
+              (AiForecastPrediction prediction) =>
+                  prediction.dailyPredictions.length,
+            )
+            .reduce(math.min),
+      );
+      if (horizon <= 0) {
+        return _ForecastChartData.empty();
+      }
+      final List<String> labels = List<String>.generate(horizon, (int index) {
+        final DateTime forecastDate = forecastStart.add(Duration(days: index));
+        return '${dayNames[forecastDate.weekday - 1]}\n${monthNames[forecastDate.month - 1]} ${forecastDate.day}';
+      });
+      final DateTime? lastUpdated = _realTransactionHistory
+          .where(_isSoldTransaction)
+          .map((TransactionData transaction) => transaction.soldAt)
+          .whereType<DateTime>()
+          .fold<DateTime?>(null, (DateTime? latest, DateTime soldAt) {
+            return latest == null || soldAt.isAfter(latest) ? soldAt : latest;
+          });
+      return _ForecastChartData(
+        labels: labels,
+        fruitLabels: predictions
+            .map((AiForecastPrediction prediction) => prediction.fruit)
+            .toList(),
+        series: predictions.map((AiForecastPrediction prediction) {
+          return prediction.dailyPredictions.take(horizon).map((double value) {
+            return double.parse(value.toStringAsFixed(1));
+          }).toList();
+        }).toList(),
+        analyzedCount:
+            forecast?.coverage?.transactionCount ?? _soldVendorTransactionCount,
+        lastUpdated: lastUpdated,
+        now: now,
+        forecastStart: forecastStart,
+        forecastEnd: forecastStart.add(Duration(days: horizon - 1)),
+      );
+    }
+
     final Map<String, double> fruitTotals = <String, double>{
       for (final String fruit in _scanReadyFruitOrder) fruit: 0,
     };
@@ -9717,16 +9813,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         continue;
       }
 
-      DateTime? soldAt = transaction.soldAt;
-      if (_isGuestSession) {
-        soldAt ??= now.subtract(Duration(days: analyzedCount % 7));
-      }
-      if (soldAt == null) {
-        continue;
-      }
-      if (!_isGuestSession && soldAt.isBefore(periodStart)) {
-        continue;
-      }
+      final DateTime soldAt =
+          transaction.soldAt ?? now.subtract(Duration(days: analyzedCount % 7));
 
       final double weightKg = _parseKgAmount(transaction.weight);
       if (weightKg <= 0) {
@@ -9766,7 +9854,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       1.08,
     ];
     final int observedDayCount = math.max(1, observedDays.length);
-    final DateTime forecastStart = today.add(const Duration(days: 1));
     final DateTime forecastEnd = forecastStart.add(const Duration(days: 6));
     final List<String> labels = List<String>.generate(7, (int index) {
       final DateTime forecastDate = forecastStart.add(Duration(days: index));
@@ -11346,7 +11433,10 @@ class _FruityVensCatalogIcons {
   static IconData iconFor(String fruitName) {
     return switch (fruitName) {
       'Apple' => Icons.apple_rounded,
-      'Mango' || 'Mango Carabao' || 'Indian Mango' => Icons.spa_rounded,
+      'Mango' ||
+      'Mango Carabao' ||
+      'Indian Mango' ||
+      'Apple Mango' => Icons.spa_rounded,
       'Watermelon' || 'Orange' || 'Lemon' || 'Pomelo' => Icons.circle_rounded,
       'Melon' => Icons.blur_circular_rounded,
       'Papaya' || 'Guyabano' => Icons.eco_rounded,
@@ -12676,6 +12766,138 @@ class _ForecastSectionTitle extends StatelessWidget {
   }
 }
 
+class _MarketOutlookLoadingState extends StatelessWidget {
+  const _MarketOutlookLoadingState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: <Widget>[
+        Icon(
+          Icons.hourglass_top_rounded,
+          size: 18,
+          color: AppColors.orangeText,
+        ),
+        SizedBox(width: 9),
+        Expanded(
+          child: Text(
+            'Loading official market history...',
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MarketOutlookErrorState extends StatelessWidget {
+  const _MarketOutlookErrorState({
+    required this.message,
+    required this.onRetry,
+  });
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: <Widget>[
+        Icon(Icons.error_outline_rounded, color: AppColors.pinkText, size: 19),
+        SizedBox(width: 9),
+        Expanded(
+          child: Text(
+            message,
+            style: TextStyle(
+              color: AppColors.pinkText,
+              fontSize: 13,
+              height: 1.3,
+            ),
+          ),
+        ),
+        IconButton(
+          tooltip: 'Retry market history',
+          onPressed: onRetry,
+          icon: const Icon(Icons.refresh_rounded),
+        ),
+      ],
+    );
+  }
+}
+
+class _MarketOutlookRow extends StatelessWidget {
+  const _MarketOutlookRow({
+    required this.fruitName,
+    required this.priceText,
+    required this.supplyText,
+    required this.sourceText,
+    required this.badge,
+  });
+
+  final String fruitName;
+  final String? priceText;
+  final String? supplyText;
+  final String sourceText;
+  final Widget badge;
+
+  @override
+  Widget build(BuildContext context) {
+    return BorderRow(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          FruitMark(name: fruitName, size: 24),
+          SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  fruitName,
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
+                ),
+                if (priceText != null) ...<Widget>[
+                  SizedBox(height: 3),
+                  Text(
+                    priceText!,
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 12,
+                      height: 1.3,
+                    ),
+                  ),
+                ],
+                if (supplyText != null) ...<Widget>[
+                  SizedBox(height: 2),
+                  Text(
+                    supplyText!,
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 12,
+                      height: 1.3,
+                    ),
+                  ),
+                ],
+                SizedBox(height: 3),
+                Text(
+                  sourceText,
+                  style: TextStyle(
+                    color: AppColors.textMuted,
+                    fontSize: 10,
+                    height: 1.25,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(width: 8),
+          badge,
+        ],
+      ),
+    );
+  }
+}
+
 class SectionLabel extends StatelessWidget {
   const SectionLabel(this.text, {super.key});
 
@@ -13563,7 +13785,6 @@ class _InventoryFruitCard extends StatelessWidget {
     required this.price,
     required this.pricingUnit,
     required this.priceConfigured,
-    required this.restockSignal,
     required this.expanded,
     required this.readOnly,
     required this.readOnlyLabel,
@@ -13581,7 +13802,6 @@ class _InventoryFruitCard extends StatelessWidget {
   final int price;
   final String pricingUnit;
   final bool priceConfigured;
-  final _RestockSignal restockSignal;
   final bool expanded;
   final bool readOnly;
   final String readOnlyLabel;
@@ -13650,8 +13870,6 @@ class _InventoryFruitCard extends StatelessWidget {
                   ),
                 ),
                 SizedBox(width: 8),
-                restockSignal.badge,
-                SizedBox(width: 4),
                 AnimatedRotation(
                   turns: expanded ? 0.5 : 0,
                   duration: const Duration(milliseconds: 180),
@@ -13671,38 +13889,6 @@ class _InventoryFruitCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 SizedBox(height: 10),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: AppColors.bgRaised,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: AppColors.borderSoft),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Text(
-                        restockSignal.label,
-                        style: TextStyle(
-                          color: AppColors.textPrimary,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      SizedBox(height: 3),
-                      Text(
-                        restockSignal.detail,
-                        style: TextStyle(
-                          color: AppColors.textSecondary,
-                          fontSize: 11,
-                          height: 1.25,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                SizedBox(height: 9),
                 LayoutBuilder(
                   builder: (BuildContext context, BoxConstraints constraints) {
                     final bool wide = constraints.maxWidth >= 520;
@@ -13784,43 +13970,6 @@ class _InventoryFruitCard extends StatelessWidget {
             firstCurve: Curves.easeOutCubic,
             secondCurve: Curves.easeOutCubic,
             sizeCurve: Curves.easeOutCubic,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _InventoryEmptySignal extends StatelessWidget {
-  const _InventoryEmptySignal();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.bgSurface,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppColors.borderSoft, width: 0.5),
-      ),
-      child: Row(
-        children: <Widget>[
-          Icon(
-            Icons.insights_rounded,
-            color: AppColors.textSecondary,
-            size: 19,
-          ),
-          SizedBox(width: 9),
-          Expanded(
-            child: Text(
-              'No fruit sales yet. Restock priority is waiting.',
-              style: TextStyle(
-                color: AppColors.textSecondary,
-                fontSize: 12,
-                height: 1.3,
-              ),
-            ),
           ),
         ],
       ),
@@ -14037,7 +14186,9 @@ class _AnalyticsEmptyState extends StatelessWidget {
 }
 
 class _ForecastEmptyState extends StatelessWidget {
-  const _ForecastEmptyState();
+  const _ForecastEmptyState({required this.message});
+
+  final String message;
 
   @override
   Widget build(BuildContext context) {
@@ -14048,7 +14199,7 @@ class _ForecastEmptyState extends StatelessWidget {
           SizedBox(width: 10),
           Expanded(
             child: Text(
-              'No sales pattern yet.',
+              message,
               style: TextStyle(
                 color: AppColors.textSecondary,
                 fontSize: 12,
@@ -14063,7 +14214,9 @@ class _ForecastEmptyState extends StatelessWidget {
 }
 
 class _ForecastChartEmptyState extends StatelessWidget {
-  const _ForecastChartEmptyState();
+  const _ForecastChartEmptyState({required this.message});
+
+  final String message;
 
   @override
   Widget build(BuildContext context) {
@@ -14081,7 +14234,7 @@ class _ForecastChartEmptyState extends StatelessWidget {
           SizedBox(width: 10),
           Expanded(
             child: Text(
-              'No sales to project yet.',
+              message,
               style: TextStyle(
                 color: AppColors.textSecondary,
                 fontSize: 12,

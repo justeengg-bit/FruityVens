@@ -229,17 +229,17 @@ flutter build apk --debug --dart-define=FRUITYVENS_AI_BASE_URL=http://YOUR_PC_IP
 
 ## ESP32-CAM Eye
 
-The app can connect to the ESP32-CAM access point as a backend sensor source:
+The app and ESP32-CAM connect to the same local router:
 
-- SSID: `FruityVens`
-- Password configured by the device: `1234`
-- Default camera host: `192.168.4.1`
-- Default stream endpoint: `http://192.168.4.1:81/stream`
+- Router SSID: `Parafiber_F0C0 2.4G`
+- Camera address: `http://192.168.1.34`
+- Snapshot endpoint: `http://192.168.1.34/snapshot.jpg`
+- Health endpoint: `http://192.168.1.34/status`
+- Preview controls: `/preview/start` and `/preview/stop`
 
-The stream is not rendered in the Flutter UI. It is passed as backend metadata
-for YOLOv8-style processing. If the access point uses WPA/WPA2, use an
-8-character or longer password in the ESP32 firmware because `1234` is too
-short for normal WPA.
+Set `WIFI_PASSWORD` in `ESP32_CAM_Stream/ESP32_CAM_Stream.ino` before flashing.
+The router should reserve `192.168.1.34` for the ESP32-CAM so another device
+cannot receive the same address.
 
 ## Local Files Not Committed
 

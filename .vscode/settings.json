@@ -1,3 +1,5 @@
 {
-  "cmake.ignoreCMakeListsMissing": true
+  "cmake.ignoreCMakeListsMissing": true,
+  "platformio-ide.useBuiltinPIOCore": false,
+  "platformio-ide.customPATH": "/home/marzomir/.local/bin:/usr/local/bin:/usr/bin"
 }

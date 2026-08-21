@@ -53,6 +53,9 @@ VERIFY_FIREBASE_AUTH = REQUIRE_FIREBASE_AUTH or os.getenv(
     "false",
 ).lower() in {"1", "true", "yes"}
 MIN_ML_ROWS = int(os.getenv("FRUITYVENS_FORECAST_MIN_ML_ROWS", "8"))
+MIN_OBSERVED_SALES_DAYS = int(
+    os.getenv("FRUITYVENS_FORECAST_MIN_OBSERVED_DAYS", "30")
+)
 LARGE_DATASET_ROWS = int(os.getenv("FRUITYVENS_FORECAST_HIST_ROWS", "10000"))
 FORECAST_FEATURES = [
     "fruit_code",
@@ -102,6 +105,7 @@ def health() -> dict[str, Any]:
         "engine": "GradientBoostingRegressor",
         "firebaseAdmin": _firebase_ready(),
         "requiresFirebaseAuth": REQUIRE_FIREBASE_AUTH,
+        "minimumObservedSalesDays": MIN_OBSERVED_SALES_DAYS,
     }
 
 
@@ -118,6 +122,16 @@ def forecast(
             source="Gradient Boosting Regression",
             model="insufficient-data",
             message="No sold transactions are available for forecasting yet.",
+            data_coverage=data_coverage,
+        )
+    if data_coverage["observedDays"] < MIN_OBSERVED_SALES_DAYS:
+        return _empty_response(
+            source="FruityVens vendor sales",
+            model="collecting-history",
+            message=(
+                f"Collecting genuine sales history: {data_coverage['observedDays']} "
+                f"of {MIN_OBSERVED_SALES_DAYS} selling days recorded."
+            ),
             data_coverage=data_coverage,
         )
 
@@ -551,6 +565,7 @@ def _prediction_payload(
         "recommendation": _recommendation(total, baseline),
         "confidence": confidence,
         "reason": _reason(fruit, total, baseline, confidence),
+        "dailyPredictions": [round(float(value), 2) for value in daily_predictions],
     }
 
 
@@ -592,9 +607,9 @@ def _summary(predictions: list[dict[str, Any]], model_name: str, confidence: str
 
 
 def _confidence_label(transaction_count: int, observed_days: int) -> str:
-    if transaction_count >= 50 and observed_days >= 14:
+    if transaction_count >= 500 and observed_days >= 180:
         return "high"
-    if transaction_count >= 15 and observed_days >= 5:
+    if transaction_count >= 100 and observed_days >= 60:
         return "medium"
     return "low"
 

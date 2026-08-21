@@ -12,8 +12,7 @@ for FruityVens.
 - Test offline mode and sync after reconnecting.
 - Check Android release signing setup privately.
 - Replace any fixed local IP like `192.168.1.9` before final release.
-- Change the ESP32-CAM password if using real WPA/WPA2 because `1234` is weak
-  and too short for normal WPA.
+- Reserve `192.168.1.34` for the ESP32-CAM in the router's DHCP settings.
 
 ## Needed Functions
 

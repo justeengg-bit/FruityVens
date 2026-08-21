@@ -191,6 +191,86 @@ class LocalSale {
   }
 }
 
+class LocalMarketHistory {
+  const LocalMarketHistory({
+    required this.seriesKey,
+    required this.fruitName,
+    required this.variant,
+    required this.metric,
+    required this.geography,
+    required this.geographyLevel,
+    required this.periodStart,
+    required this.periodGranularity,
+    required this.value,
+    required this.unit,
+    required this.sourceAgency,
+    required this.sourceTable,
+    required this.sourceUrl,
+    required this.sourceCommodity,
+    required this.seriesPriority,
+    required this.importedAt,
+  });
+
+  final String seriesKey;
+  final String fruitName;
+  final String variant;
+  final String metric;
+  final String geography;
+  final String geographyLevel;
+  final DateTime periodStart;
+  final String periodGranularity;
+  final double value;
+  final String unit;
+  final String sourceAgency;
+  final String sourceTable;
+  final String sourceUrl;
+  final String sourceCommodity;
+  final int seriesPriority;
+  final DateTime importedAt;
+
+  factory LocalMarketHistory.fromMap(Map<String, Object?> map) {
+    return LocalMarketHistory(
+      seriesKey: map['series_key']! as String,
+      fruitName: map['fruit_name']! as String,
+      variant: map['variant']! as String,
+      metric: map['metric']! as String,
+      geography: map['geography']! as String,
+      geographyLevel: map['geography_level']! as String,
+      periodStart: DateTime.parse(map['period_start']! as String),
+      periodGranularity: map['period_granularity']! as String,
+      value: (map['value']! as num).toDouble(),
+      unit: map['unit']! as String,
+      sourceAgency: map['source_agency']! as String,
+      sourceTable: map['source_table']! as String,
+      sourceUrl: map['source_url']! as String,
+      sourceCommodity: map['source_commodity']! as String,
+      seriesPriority: (map['series_priority']! as num).round(),
+      importedAt: DateTime.parse(map['imported_at']! as String),
+    );
+  }
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'series_key': seriesKey,
+      'fruit_name': fruitName,
+      'variant': variant,
+      'metric': metric,
+      'geography': geography,
+      'geography_level': geographyLevel,
+      'period_start': periodStart.toIso8601String(),
+      'period_granularity': periodGranularity,
+      'value': value,
+      'unit': unit,
+      'source_agency': sourceAgency,
+      'source_table': sourceTable,
+      'source_url': sourceUrl,
+      'source_commodity': sourceCommodity,
+      'series_priority': seriesPriority,
+      'imported_at': importedAt.toIso8601String(),
+    };
+  }
+}
+
 class LocalWorkerRequest {
   const LocalWorkerRequest({
     this.id,
@@ -288,6 +368,7 @@ class AppDatabase {
   final Map<String, LocalAccount> _memoryAccounts = <String, LocalAccount>{};
   final Map<String, String> _memorySettings = <String, String>{};
   final List<LocalSale> _memorySales = <LocalSale>[];
+  final List<LocalMarketHistory> _memoryMarketHistory = <LocalMarketHistory>[];
   final List<LocalPriceChange> _memoryPriceChanges = <LocalPriceChange>[];
   final List<LocalWorkerRequest> _memoryWorkerRequests = <LocalWorkerRequest>[];
   int _memorySaleId = 0;
@@ -309,7 +390,7 @@ class AppDatabase {
     if (_memory) {
       opened = await openDatabase(
         inMemoryDatabasePath,
-        version: 7,
+        version: 8,
         onCreate: _createSchema,
         onUpgrade: _upgradeSchema,
       );
@@ -317,7 +398,7 @@ class AppDatabase {
       final String dbPath = await getDatabasesPath();
       opened = await openDatabase(
         p.join(dbPath, 'fruityvens.sqlite'),
-        version: 7,
+        version: 8,
         onCreate: _createSchema,
         onUpgrade: _upgradeSchema,
       );
@@ -383,6 +464,7 @@ class AppDatabase {
     await _createSettingsSchema(db);
     await _createPriceHistorySchema(db);
     await _createWorkerRequestSchema(db);
+    await _createMarketHistorySchema(db);
   }
 
   Future<void> _upgradeSchema(
@@ -462,6 +544,9 @@ class AppDatabase {
         "UPDATE local_fruits SET price_unit = 'piece' "
         "WHERE name = 'Apple' AND price <= 0",
       );
+    }
+    if (oldVersion < 8) {
+      await _createMarketHistorySchema(db);
     }
     await db.execute(
       'CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_transactions_cloud_id '
@@ -545,6 +630,35 @@ class AppDatabase {
         synced INTEGER NOT NULL DEFAULT 0
       )
     ''');
+  }
+
+  Future<void> _createMarketHistorySchema(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS market_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        series_key TEXT NOT NULL,
+        fruit_name TEXT NOT NULL,
+        variant TEXT NOT NULL,
+        metric TEXT NOT NULL,
+        geography TEXT NOT NULL,
+        geography_level TEXT NOT NULL,
+        period_start TEXT NOT NULL,
+        period_granularity TEXT NOT NULL,
+        value REAL NOT NULL,
+        unit TEXT NOT NULL,
+        source_agency TEXT NOT NULL,
+        source_table TEXT NOT NULL,
+        source_url TEXT NOT NULL,
+        source_commodity TEXT NOT NULL,
+        series_priority INTEGER NOT NULL DEFAULT 0,
+        imported_at TEXT NOT NULL,
+        UNIQUE(series_key, period_start)
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_market_history_lookup '
+      'ON market_history(fruit_name, metric, period_start)',
+    );
   }
 
   Future<void> seedFruitCatalog(List<SeedFruit> fruits) async {
@@ -674,6 +788,93 @@ class AppDatabase {
       return null;
     }
     return rows.first['value']! as String;
+  }
+
+  Future<void> replaceMarketHistory(List<LocalMarketHistory> records) async {
+    if (_memory) {
+      _memoryMarketHistory
+        ..clear()
+        ..addAll(records);
+      return;
+    }
+
+    final Database db = await _database;
+    await db.transaction((Transaction transaction) async {
+      await transaction.delete('market_history');
+      final Batch batch = transaction.batch();
+      for (final LocalMarketHistory record in records) {
+        batch.insert(
+          'market_history',
+          record.toMap(),
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+      await batch.commit(noResult: true);
+    });
+  }
+
+  Future<int> getMarketHistoryCount() async {
+    if (_memory) {
+      return _memoryMarketHistory.length;
+    }
+
+    final Database db = await _database;
+    final List<Map<String, Object?>> rows = await db.rawQuery(
+      'SELECT COUNT(*) AS record_count FROM market_history',
+    );
+    return (rows.first['record_count']! as num).round();
+  }
+
+  Future<List<LocalMarketHistory>> getMarketHistory({
+    Iterable<String>? fruitNames,
+    String? metric,
+  }) async {
+    final Set<String>? requestedFruits = fruitNames?.toSet();
+    if (_memory) {
+      final List<LocalMarketHistory> records = _memoryMarketHistory.where((
+        LocalMarketHistory record,
+      ) {
+        final bool fruitMatches =
+            requestedFruits == null ||
+            requestedFruits.isEmpty ||
+            requestedFruits.contains(record.fruitName);
+        final bool metricMatches = metric == null || record.metric == metric;
+        return fruitMatches && metricMatches;
+      }).toList();
+      records.sort((LocalMarketHistory a, LocalMarketHistory b) {
+        final int fruitComparison = a.fruitName.compareTo(b.fruitName);
+        if (fruitComparison != 0) {
+          return fruitComparison;
+        }
+        final int seriesComparison = a.seriesKey.compareTo(b.seriesKey);
+        if (seriesComparison != 0) {
+          return seriesComparison;
+        }
+        return a.periodStart.compareTo(b.periodStart);
+      });
+      return records;
+    }
+
+    final Database db = await _database;
+    final List<String> clauses = <String>[];
+    final List<Object> arguments = <Object>[];
+    if (requestedFruits != null && requestedFruits.isNotEmpty) {
+      clauses.add(
+        'fruit_name IN (${List<String>.filled(requestedFruits.length, '?').join(', ')})',
+      );
+      arguments.addAll(requestedFruits);
+    }
+    if (metric != null) {
+      clauses.add('metric = ?');
+      arguments.add(metric);
+    }
+    final List<Map<String, Object?>> rows = await db.query(
+      'market_history',
+      where: clauses.isEmpty ? null : clauses.join(' AND '),
+      whereArgs: arguments.isEmpty ? null : arguments,
+      orderBy: 'fruit_name, series_key, period_start',
+    );
+    return rows.map(LocalMarketHistory.fromMap).toList();
   }
 
   Future<List<LocalFruit>> getManagedFruits() async {
