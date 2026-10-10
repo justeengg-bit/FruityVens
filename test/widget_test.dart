@@ -3,6 +3,60 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fruityvens_app/data/app_database.dart';
 import 'package:fruityvens_app/main.dart';
+import 'package:fruityvens_app/services/ai_automation_client.dart';
+import 'package:fruityvens_app/services/cdo_sample_sales_service.dart';
+
+class _NineFruitForecastClient extends AiAutomationClient {
+  int calls = 0;
+  int transactionCount = 0;
+
+  @override
+  Future<AiAutomationResult> generateForecast({
+    required List<Map<String, Object?>> inventory,
+    required Map<String, Object?> salesSnapshot,
+    List<Map<String, Object?>> transactions = const <Map<String, Object?>>[],
+    Map<String, Object?>? cameraEye,
+  }) async {
+    calls++;
+    transactionCount = transactions.length;
+    const List<String> fruits = <String>[
+      'Apple',
+      'Banana',
+      'Grapes',
+      'Mango',
+      'Orange',
+      'Papaya',
+      'Pineapple',
+      'Watermelon',
+      'Calamansi',
+    ];
+    return AiAutomationResult(
+      summary: 'Nine-fruit demand forecast.',
+      model: 'Regression fixture',
+      source: 'Test forecast service',
+      predictions: List<AiForecastPrediction>.generate(fruits.length, (
+        int fruit,
+      ) {
+        final List<double> daily = List<double>.generate(
+          7,
+          (int day) => (fruit + 1).toDouble() + day / 10,
+        );
+        return AiForecastPrediction(
+          fruit: fruits[fruit],
+          predictedKgTomorrow: daily.first,
+          predictedKgTotal: daily.fold<double>(
+            0,
+            (double a, double b) => a + b,
+          ),
+          dailyPredictions: daily,
+          recommendation: 'Light top-up',
+          confidence: 'High',
+          reason: 'Regression fixture',
+        );
+      }),
+    );
+  }
+}
 
 void main() {
   Future<void> dismissPhoneLinkPrompt(WidgetTester tester) async {
@@ -73,6 +127,216 @@ void main() {
             .length;
     expect(warningCount, 1);
   }
+
+  testWidgets('Forecast renders nine fruits and preserves Other daily totals', (
+    WidgetTester tester,
+  ) async {
+    final AppDatabase database = AppDatabase.inMemory();
+    final DateTime now = DateTime.now();
+    final DateTime today = DateTime(now.year, now.month, now.day, 12);
+    for (int day = 0; day < 30; day++) {
+      await database.addSale(
+        fruitName: 'Mango',
+        weightGrams: 1000,
+        unitPrice: 6000,
+        totalPrice: 6000,
+        soldAt: today.subtract(Duration(days: day)),
+      );
+    }
+    final _NineFruitForecastClient client = _NineFruitForecastClient();
+    await tester.pumpWidget(
+      FruityVensApp(database: database, aiAutomationClient: client),
+    );
+    await createAccountAndOpenDashboard(tester);
+    await openOperationsMenu(tester);
+    await tester.tap(find.text('Generate forecast'));
+    await tester.pumpAndSettle();
+    final Finder generateButton = find.widgetWithText(
+      PrimaryButton,
+      'Generate forecast',
+    );
+    await tester.ensureVisible(generateButton);
+    await tester.pumpAndSettle();
+    await tester.tap(generateButton);
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(client.calls, 1);
+    expect(client.transactionCount, 30);
+    expect(find.text('Nine-fruit demand forecast.'), findsOneWidget);
+    final StackedBarChart chart = tester.widget<StackedBarChart>(
+      find.byType(StackedBarChart),
+    );
+    final ChartLegend legend = tester.widget<ChartLegend>(
+      find.byType(ChartLegend),
+    );
+    expect(chart.series, hasLength(5));
+    expect(legend.labels.last, 'Other');
+    expect(chart.labels, hasLength(7));
+    for (int day = 0; day < 7; day++) {
+      final num total = chart.series.fold<num>(
+        0,
+        (num sum, List<num> values) => sum + values[day],
+      );
+      expect(total, closeTo(45 + 0.9 * day, 0.000000001));
+      expect(chart.series.last[day], closeTo(15 + 0.5 * day, 0.000000001));
+    }
+  });
+
+  testWidgets('Dashboard preserves grouped sale amounts', (
+    WidgetTester tester,
+  ) async {
+    final AppDatabase database = AppDatabase.inMemory();
+    await database.addSale(
+      fruitName: 'Mango',
+      weightGrams: 1234,
+      unitPrice: 97245,
+      totalPrice: 120000,
+      soldAt: DateTime.now(),
+    );
+    await tester.pumpWidget(FruityVensApp(database: database));
+    await createAccountAndOpenDashboard(tester);
+    expect(find.text('PHP 1,200.00'), findsWidgets);
+    expect(find.text('PHP 1.00'), findsNothing);
+  });
+
+  testWidgets(
+    'Imported CDO history remains editable without an import button',
+    (WidgetTester tester) async {
+      final AppDatabase database = AppDatabase.inMemory();
+      await database.addSale(
+        fruitName: 'Mango',
+        weightGrams: 1000,
+        unitPrice: 10000,
+        totalPrice: 10000,
+        soldAt: DateTime.now(),
+      );
+      await tester.runAsync(() async {
+        final dataset = await const CdoSampleSalesService().load();
+        await dataset.importInto(database);
+      });
+      await tester.pumpWidget(FruityVensApp(database: database));
+      await createAccountAndOpenDashboard(tester);
+      await openOperationsMenu(tester);
+      await tester.tap(find.text('History'));
+      await tester.pumpAndSettle();
+      expect(await database.getSalesTransactions(), hasLength(1250));
+      expect(find.byTooltip('Manage sale'), findsWidgets);
+      expect(find.textContaining('Includes generated CDO sales'), findsWidgets);
+      expect(find.text('Add July–October sales'), findsNothing);
+      expect(find.text('Use actual sales'), findsNothing);
+      expect(find.text('Use CDO sample sales'), findsNothing);
+
+      await tester.tap(find.byTooltip('Back'));
+      await tester.pumpAndSettle();
+      await openOperationsMenu(tester);
+      await tester.tap(find.text('View analytics'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Last 7 days').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('All time').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(find.text('PHP 170,438.24'), findsWidgets);
+      final StackedBarChart chart = tester.widget<StackedBarChart>(
+        find.byType(StackedBarChart).first,
+      );
+      expect(
+        chart.series.expand((values) => values).fold<num>(0, (a, b) => a + b),
+        17043824,
+      );
+
+      await tester.tap(find.byTooltip('Back'));
+      await tester.pumpAndSettle();
+      await openOperationsMenu(tester);
+      await tester.tap(find.text('Generate forecast'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.getTopLeft(find.text('CDO market outlook')).dy,
+        greaterThan(tester.getTopLeft(find.text('What to do next')).dy),
+      );
+    },
+  );
+
+  testWidgets(
+    'Analytics counts completed sales per fruit within the selected dates',
+    (WidgetTester tester) async {
+      final AppDatabase database = AppDatabase.inMemory();
+      final DateTime now = DateTime.now();
+      for (final entry in <String, int>{'Mango': 89, 'Banana': 31}.entries) {
+        for (int i = 0; i < entry.value; i++) {
+          await database.addSale(
+            fruitName: entry.key,
+            weightGrams: 500,
+            unitPrice: 6000,
+            totalPrice: 3000,
+            soldAt: now,
+          );
+        }
+      }
+      for (int i = 0; i < 10; i++) {
+        await database.addSale(
+          fruitName: 'Mango',
+          weightGrams: 1000,
+          unitPrice: 6000,
+          totalPrice: 6000,
+          soldAt: now.subtract(const Duration(days: 45)),
+        );
+      }
+      await database.addSale(
+        fruitName: 'Mango',
+        weightGrams: 1000,
+        unitPrice: 6000,
+        totalPrice: 6000,
+        soldAt: now,
+        status: 'cancelled',
+      );
+      await database.addSale(
+        fruitName: 'Banana',
+        weightGrams: 1000,
+        unitPrice: 6000,
+        totalPrice: 6000,
+        soldAt: now,
+        status: 'removed',
+      );
+      await tester.pumpWidget(FruityVensApp(database: database));
+      await createAccountAndOpenDashboard(tester);
+      await openOperationsMenu(tester);
+      await tester.tap(find.text('View analytics'));
+      await tester.pumpAndSettle();
+      final Finder mangoRow = find.byKey(
+        const ValueKey<String>('analytics-sales-count-Mango'),
+      );
+      final Finder bananaRow = find.byKey(
+        const ValueKey<String>('analytics-sales-count-Banana'),
+      );
+      expect(
+        find.descendant(of: mangoRow, matching: find.text('89 sales')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: bananaRow, matching: find.text('31 sales')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('120 completed sales'), findsOneWidget);
+      await tester.tap(find.text('Last 7 days').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('All time').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(of: mangoRow, matching: find.text('99 sales')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: bananaRow, matching: find.text('31 sales')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('130 completed sales'), findsOneWidget);
+    },
+  );
 
   testWidgets('FruityVens login smoke test', (WidgetTester tester) async {
     await tester.pumpWidget(FruityVensApp(database: AppDatabase.inMemory()));
@@ -384,7 +648,7 @@ void main() {
     );
     expect(find.text('Collecting sales history'), findsOneWidget);
     expect(
-      find.text('Daily projections unlock after 30 genuine selling days.'),
+      find.text('Daily projections unlock after 30 selling days.'),
       findsWidgets,
     );
     expect(find.text('1,248'), findsNothing);
@@ -653,7 +917,7 @@ void main() {
     );
   });
 
-  testWidgets('Worker scale sale is saved without owner approval', (
+  testWidgets('Worker scale sale waits for owner approval', (
     WidgetTester tester,
   ) async {
     tester.view.physicalSize = const Size(720, 1612);
@@ -702,18 +966,15 @@ void main() {
     await dismissPhoneLinkPrompt(tester);
 
     final List<LocalSale> sales = await database.getSalesTransactions();
-    expect(sales, hasLength(1));
-    expect(sales.single.cloudId, 'scale_fruityvens_scale_01_sale_1');
-    expect(sales.single.fruitName, 'Mango');
-    expect(sales.single.status, 'sold');
+    expect(sales, isEmpty);
 
     final List<LocalWorkerRequest> pendingRequests = await database
         .getWorkerRequests(status: 'pending', ownerUid: 'owner-uid');
-    expect(pendingRequests, isEmpty);
+    expect(pendingRequests, hasLength(1));
     final List<LocalWorkerRequest> requests = await database.getWorkerRequests(
       ownerUid: 'owner-uid',
     );
-    expect(requests.single.status, 'approved');
+    expect(requests.single.status, 'pending');
   });
 
   testWidgets('Worker can request a manually added sale from history', (
@@ -831,7 +1092,8 @@ void main() {
     await tester.tap(find.byTooltip('Done managing fruits'));
     await tester.pumpAndSettle();
     expect(find.text('PHP 42.50/kg'), findsOneWidget);
-    expect(find.text('Set price per piece'), findsWidgets);
+    expect(find.text('Set price per piece'), findsNothing);
+    expect(find.text('Per piece'), findsNothing);
 
     final Finder lemonPriceField = find.byWidgetPredicate((Widget widget) {
       return widget is EditableText && widget.controller.text == '42.50';
@@ -863,23 +1125,9 @@ void main() {
     lemon = await database.getManagedFruit('Lemon');
     expect(lemon?.price, 6225);
 
-    final Finder visibleUnitDropdown = find
-        .byType(DropdownButtonFormField<String>)
-        .hitTestable()
-        .last;
-    await tester.ensureVisible(visibleUnitDropdown);
-    await tester.tap(visibleUnitDropdown);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Per piece').hitTestable().last);
-    await tester.pumpAndSettle();
-    final Finder visibleSaveButtonAfterUnit = find
-        .widgetWithText(PrimaryButton, 'Save')
-        .hitTestable();
-    await tester.tap(visibleSaveButtonAfterUnit);
-    await tester.pumpAndSettle();
-
-    expect(find.text('PHP 62.25/pc'), findsOneWidget);
+    expect(find.text('Per piece'), findsNothing);
+    expect(find.text('PHP 62.25/kg'), findsOneWidget);
     lemon = await database.getManagedFruit('Lemon');
-    expect(lemon?.pricingUnit, 'piece');
+    expect(lemon?.pricingUnit, 'kg');
   });
 }

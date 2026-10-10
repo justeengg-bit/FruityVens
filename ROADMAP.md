@@ -12,7 +12,8 @@ for FruityVens.
 - Test offline mode and sync after reconnecting.
 - Check Android release signing setup privately.
 - Replace any fixed local IP like `192.168.1.9` before final release.
-- Reserve `192.168.1.34` for the ESP32-CAM in the router's DHCP settings.
+- Confirm the ESP32-CAM hotspot address after reconnecting and update
+  `FRUITYVENS_CAMERA_HOST` if it is no longer `172.20.10.5`.
 
 ## Needed Functions
 

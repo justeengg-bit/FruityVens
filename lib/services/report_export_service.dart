@@ -49,6 +49,13 @@ class ReportExportService {
 
     document.addPage(
       pw.MultiPage(
+        maxPages: 200,
+        header: data.datasetLabel == null
+            ? null
+            : (pw.Context context) => pw.Text(
+                'Includes generated sales for testing - see record labels',
+                style: const pw.TextStyle(fontSize: 9),
+              ),
         pageTheme: pw.PageTheme(
           margin: const pw.EdgeInsets.all(28),
           theme: pw.ThemeData.withFont(
@@ -103,6 +110,18 @@ class ReportExportService {
                 : _emptyBox('No sales in this range.'),
             pw.SizedBox(height: 10),
             _metricWrap(data.analyticsMetrics, green, orange),
+            if (data.salesCounts.isNotEmpty) ...<pw.Widget>[
+              _sectionTitle('Sales by fruit', green),
+              _tableOrEmpty(
+                headers: const <String>['Fruit', 'Completed sales'],
+                emptyMessage: 'No completed sales in this range.',
+                rows: data.salesCounts
+                    .map(
+                      (fruit) => <String>[fruit.name, fruit.count.toString()],
+                    )
+                    .toList(),
+              ),
+            ],
             _sectionTitle('Revenue Share', green),
             _tableOrEmpty(
               headers: const <String>['Fruit', 'Revenue'],
@@ -168,6 +187,23 @@ class ReportExportService {
                     fontWeight: pw.FontWeight.bold,
                   ),
                 ),
+                if (data.datasetLabel != null) ...<pw.Widget>[
+                  pw.SizedBox(height: 6),
+                  pw.Text(
+                    data.datasetLabel!
+                        .replaceAll('—', '-')
+                        .replaceAll('–', '-')
+                        .replaceAll('•', '-'),
+                    style: pw.TextStyle(
+                      fontSize: 11,
+                      fontWeight: pw.FontWeight.bold,
+                    ),
+                  ),
+                  pw.Text(
+                    'This history includes generated sales for testing.',
+                    style: const pw.TextStyle(fontSize: 10),
+                  ),
+                ],
                 pw.SizedBox(height: 4),
                 pw.Text(
                   'Generated ${data.displayDate}',
@@ -388,9 +424,13 @@ class ReportExportData {
     required this.analytics,
     required this.analyticsMetrics,
     required this.transactions,
+    this.datasetLabel,
+    this.salesCounts = const <ReportFruitSalesCount>[],
   });
 
   final DateTime generatedAt;
+  final String? datasetLabel;
+  final List<ReportFruitSalesCount> salesCounts;
   final List<ReportMetric> dashboardMetrics;
   final List<ReportFruit> inventory;
   final String forecastSummary;
@@ -408,8 +448,18 @@ class ReportExportData {
   String get fileName {
     final String day = generatedAt.day.toString().padLeft(2, '0');
     final String month = generatedAt.month.toString().padLeft(2, '0');
-    return 'FruityVens_report_$day-$month-${generatedAt.year}.pdf';
+    final String prefix = datasetLabel == null
+        ? 'FruityVens_report'
+        : 'FruityVens_SAMPLE_report';
+    return '${prefix}_$day-$month-${generatedAt.year}.pdf';
   }
+}
+
+class ReportFruitSalesCount {
+  const ReportFruitSalesCount({required this.name, required this.count});
+
+  final String name;
+  final int count;
 }
 
 class ReportMetric {

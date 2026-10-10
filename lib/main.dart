@@ -31,34 +31,13 @@ const String _appCheckDebugToken = String.fromEnvironment(
   'FRUITYVENS_APP_CHECK_DEBUG_TOKEN',
 );
 const String _pricingUnitKg = 'kg';
-const String _pricingUnitPiece = 'piece';
 const double _appTextScale = 1.06;
-const List<String> _pricingUnitOptions = <String>[
-  _pricingUnitKg,
-  _pricingUnitPiece,
-];
 
-String _normalizePricingUnit(Object? value) {
-  final String clean = (value ?? '').toString().trim().toLowerCase();
-  if (clean == _pricingUnitPiece || clean == 'pc' || clean == 'each') {
-    return _pricingUnitPiece;
-  }
-  return _pricingUnitKg;
-}
+String _normalizePricingUnit(Object? _) => _pricingUnitKg;
 
-String _pricingUnitName(String unit) {
-  return _normalizePricingUnit(unit) == _pricingUnitPiece ? 'piece' : 'kg';
-}
+String _pricingUnitName(String _) => 'kg';
 
-String _pricingUnitShortName(String unit) {
-  return _normalizePricingUnit(unit) == _pricingUnitPiece ? 'pc' : 'kg';
-}
-
-String _pricingUnitDropdownLabel(String unit) {
-  return _normalizePricingUnit(unit) == _pricingUnitPiece
-      ? 'Per piece'
-      : 'Per kg';
-}
+String _pricingUnitShortName(String _) => 'kg';
 
 String _priceWithPricingUnit(int price, String unit) {
   return '${money(price)}/${_pricingUnitShortName(unit)}';
@@ -152,9 +131,10 @@ class MyApp extends FruityVensApp {
 }
 
 class FruityVensApp extends StatelessWidget {
-  const FruityVensApp({super.key, this.database});
+  const FruityVensApp({super.key, this.database, this.aiAutomationClient});
 
   final AppDatabase? database;
+  final AiAutomationClient? aiAutomationClient;
 
   @override
   Widget build(BuildContext context) {
@@ -180,7 +160,10 @@ class FruityVensApp extends StatelessWidget {
           home: child,
         );
       },
-      child: FruityVensHome(database: database),
+      child: FruityVensHome(
+        database: database,
+        aiAutomationClient: aiAutomationClient,
+      ),
     );
   }
 }
@@ -210,9 +193,10 @@ class _PhoneLinkSetup {
 }
 
 class FruityVensHome extends StatefulWidget {
-  const FruityVensHome({super.key, this.database});
+  const FruityVensHome({super.key, this.database, this.aiAutomationClient});
 
   final AppDatabase? database;
+  final AiAutomationClient? aiAutomationClient;
 
   @override
   State<FruityVensHome> createState() => _FruityVensHomeState();
@@ -249,7 +233,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   static const Duration _workerRequestSyncTimeout = Duration(seconds: 5);
   late final AppDatabase _database;
   late final bool _ownsDatabase;
-  final AiAutomationClient _aiAutomationClient = const AiAutomationClient();
+  late final AiAutomationClient _aiAutomationClient;
   final CameraEyeService _cameraEyeService = const CameraEyeService();
   final FirebaseSyncService _firebaseSyncService = const FirebaseSyncService();
   final MarketOutlookService _marketOutlookService =
@@ -294,6 +278,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   bool _creatingWorkerAccount = false;
   bool _resetSent = false;
   bool _forecastGenerating = false;
+  int _forecastGeneration = 0;
   bool _marketOutlookLoading = false;
   bool _showAllMarketOutlooks = false;
   bool _exportingReport = false;
@@ -343,7 +328,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   double _historySwipeDragOffset = 0;
   bool _historySwipeTriggered = false;
   String? _fruitToAdd;
-  String _newPricingUnit = _pricingUnitKg;
   String? _expandedInventoryFruit;
   String? _priceConflictNotice;
   String _scaleBaseUrl = '';
@@ -521,6 +505,12 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   List<TransactionData> get _activeTransactionHistory =>
       _isGuestSession ? _demoTransactionHistory : _realTransactionHistory;
 
+  bool get _hasGeneratedSales =>
+      !_isGuestSession &&
+      _realTransactionHistory.any(
+        (TransactionData sale) => sale.isGenerated && sale.status != 'Removed',
+      );
+
   bool get _isWorkerSession =>
       _sessionEmail != null &&
       !_isGuestSession &&
@@ -665,6 +655,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     super.initState();
     _database = widget.database ?? AppDatabase();
     _ownsDatabase = widget.database == null;
+    _aiAutomationClient =
+        widget.aiAutomationClient ?? const AiAutomationClient();
     _cloudSyncEnabled = _firebaseSyncService.isAvailable;
     _cloudSyncStatus = _cloudSyncEnabled
         ? 'Firebase sync ready'
@@ -1451,6 +1443,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       soldAt: sale.soldAt,
       saleId: sale.id,
       cloudId: sale.cloudId,
+      weightGrams: sale.weightGrams,
+      totalPrice: sale.totalPrice,
     );
   }
 
@@ -1467,7 +1461,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
   Future<void> _loadWorkerRequestsFromDatabase() async {
     final String? ownerUid = _firebaseDataOwnerUid;
-    await _autoApplyScaleSaleWorkerRequests(ownerUid);
     final List<LocalWorkerRequest> requests = await _database.getWorkerRequests(
       ownerUid: ownerUid,
     );
@@ -1477,52 +1470,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     setState(() {
       _workerRequests = requests;
     });
-  }
-
-  Future<void> _autoApplyScaleSaleWorkerRequests(String? ownerUid) async {
-    if (_isGuestSession || ownerUid == null || ownerUid.isEmpty) {
-      return;
-    }
-    final List<LocalWorkerRequest> pendingRequests = await _database
-        .getWorkerRequests(status: 'pending', ownerUid: ownerUid);
-    final Iterable<LocalWorkerRequest> scaleSaleRequests = pendingRequests
-        .where(_isScaleSaleWorkerRequest);
-    bool appliedAny = false;
-    for (final LocalWorkerRequest request in scaleSaleRequests) {
-      try {
-        await _applyApprovedWorkerRequest(request);
-        await _database.updateWorkerRequestStatus(
-          requestId: request.requestId,
-          status: 'approved',
-        );
-        appliedAny = true;
-      } catch (error, stackTrace) {
-        developer.log(
-          'Could not auto-approve scale worker request',
-          name: 'FruityVensWorkerRequests',
-          error: error,
-          stackTrace: stackTrace,
-        );
-      }
-    }
-    if (!appliedAny) {
-      return;
-    }
-    await _loadTransactionsFromDatabase();
-    unawaited(_syncTransactionsToFirebase());
-    if (_cloudSyncEnabled && _firebaseSyncService.currentUserId != null) {
-      unawaited(_syncWorkerRequestsToFirebase());
-    } else {
-      unawaited(_syncWhenInternetReturns());
-    }
-  }
-
-  bool _isScaleSaleWorkerRequest(LocalWorkerRequest request) {
-    final Object? requestedCloudId = request.requestedData['cloudId'];
-    final String cloudId =
-        request.saleCloudId ??
-        (requestedCloudId is String ? requestedCloudId : '');
-    return request.type == 'create_sale' && cloudId.startsWith('scale_');
   }
 
   DashboardStats _dashboardStats() {
@@ -1541,13 +1488,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       int sum,
       TransactionData transaction,
     ) {
-      return sum + _parsePesoAmount(transaction.price);
+      return sum + transaction.totalPriceCentavos;
     });
     final double totalWeightKg = soldTransactions.fold<double>(0, (
       double sum,
       TransactionData transaction,
     ) {
-      return sum + _parseKgAmount(transaction.weight);
+      return sum + transaction.weightKg;
     });
     final Map<String, int> fruitCounts = <String, int>{};
     final Map<String, double> fruitWeights = <String, double>{};
@@ -1560,13 +1507,13 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       );
       fruitWeights.update(
         transaction.fruit,
-        (double value) => value + _parseKgAmount(transaction.weight),
-        ifAbsent: () => _parseKgAmount(transaction.weight),
+        (double value) => value + transaction.weightKg,
+        ifAbsent: () => transaction.weightKg,
       );
       fruitRevenue.update(
         transaction.fruit,
-        (int value) => value + _parsePesoAmount(transaction.price),
-        ifAbsent: () => _parsePesoAmount(transaction.price),
+        (int value) => value + transaction.totalPriceCentavos,
+        ifAbsent: () => transaction.totalPriceCentavos,
       );
     }
     final List<FruitRank> topFruitRanks =
@@ -1629,18 +1576,12 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     return ((_catalog[fruit]?.price ?? 0) * 100).round();
   }
 
-  String _defaultPricingUnitFor(String fruit) {
-    return fruit == 'Apple' ? _pricingUnitPiece : _pricingUnitKg;
-  }
+  String _defaultPricingUnitFor(String _) => _pricingUnitKg;
 
   String _pricingUnitFor(String fruit) {
     return _normalizePricingUnit(
       _pricingUnits[fruit] ?? _defaultPricingUnitFor(fruit),
     );
-  }
-
-  String _newPricingUnitForSelectedFruit() {
-    return _normalizePricingUnit(_newPricingUnit);
   }
 
   bool _inventoryPriceIsConfigured(String fruit) {
@@ -2593,6 +2534,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     }
     setState(() {
       _signingOut = true;
+      _latestAiForecast = null;
+      _latestAiError = null;
+      _forecastGenerating = false;
+      _forecastGeneration++;
       _isGuestSession = false;
       _cloudSyncStatus = _cloudSyncEnabled
           ? 'Firebase sync ready'
@@ -4267,7 +4212,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       return;
     }
 
-    final String pricingUnit = _newPricingUnitForSelectedFruit();
+    const String pricingUnit = _pricingUnitKg;
     final int? price = _parsePriceInputCentavos(_newPriceController.text);
     if (price == null || price <= 0) {
       _toast(
@@ -4298,7 +4243,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _stocks[fruit] = savedStock;
       _configuredPriceFruits.add(fruit);
       _fruitToAdd = null;
-      _newPricingUnit = _pricingUnitKg;
       _expandedInventoryFruit = fruit;
       _newPriceController.clear();
       _priceConflictFruits.remove(fruit);
@@ -4546,6 +4490,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
     return ReportExportData(
       generatedAt: now,
+      datasetLabel: _hasGeneratedSales
+          ? 'Includes generated CDO sales (Jul 1-Oct 9, 2026)'
+          : null,
       dashboardMetrics: <ReportMetric>[
         ReportMetric(
           'Today sales',
@@ -4590,7 +4537,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           analytics.periodLabel,
           highlight: true,
         ),
-        ReportMetric('Units sold', analytics.unitsSold, 'Across all fruits'),
+        ReportMetric('Weight sold', analytics.unitsSold, 'Across all fruits'),
         ReportMetric(
           'Best seller',
           analytics.bestSeller,
@@ -4602,6 +4549,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           analytics.averageLabel,
         ),
       ],
+      salesCounts: analytics.movements
+          .map(
+            (movement) => ReportFruitSalesCount(
+              name: movement.name,
+              count: movement.salesCount,
+            ),
+          )
+          .toList(),
       transactions: _visibleTransactionHistory.map((
         TransactionData transaction,
       ) {
@@ -4681,7 +4636,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
   int get _observedVendorSalesDays {
     final Set<String> observedDates = <String>{};
-    for (final TransactionData transaction in _realTransactionHistory) {
+    for (final TransactionData transaction in _activeTransactionHistory) {
       final DateTime? soldAt = transaction.soldAt;
       if (!_isSoldTransaction(transaction) || soldAt == null) {
         continue;
@@ -4692,7 +4647,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   }
 
   int get _soldVendorTransactionCount {
-    return _realTransactionHistory.where(_isSoldTransaction).length;
+    return _activeTransactionHistory.where(_isSoldTransaction).length;
   }
 
   bool get _vendorForecastReady {
@@ -4729,6 +4684,20 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     return managed.isNotEmpty ? managed : outlooks.take(6).toList();
   }
 
+  Widget _generatedSalesNotice() {
+    return AppCard(
+      padding: const EdgeInsets.all(12),
+      child: Text(
+        'Includes generated CDO sales: Jul 1–Oct 9, 2026.',
+        style: TextStyle(
+          color: AppColors.orangeText,
+          fontSize: 12,
+          height: 1.35,
+        ),
+      ),
+    );
+  }
+
   Future<void> _generateAiForecast({bool quickAction = false}) async {
     if (_isGuestSession) {
       _generateDemoForecast(quickAction: quickAction);
@@ -4744,6 +4713,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       return;
     }
 
+    final int generation = ++_forecastGeneration;
     setState(() {
       _forecastGenerating = true;
       _latestAiError = null;
@@ -4753,7 +4723,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       await _loadInventoryFromDatabase();
       await _loadTransactionsFromDatabase();
       await _syncWhenInternetReturns();
-      if (!mounted) {
+      if (!mounted || generation != _forecastGeneration) {
         return;
       }
       final DashboardStats stats = _dashboardStats();
@@ -4785,19 +4755,21 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               'topFruit': stats.topFruit,
               'period': 'next 7 days',
               'stockTracking': false,
+              'includesGeneratedSales': _hasGeneratedSales,
             },
             transactions: _activeTransactionHistory.map((
               TransactionData transaction,
             ) {
-              final double weightKg = _parseKgAmount(transaction.weight);
+              final double weightKg = transaction.weightKg;
               return <String, Object?>{
                 'cloudId': transaction.cloudId,
                 'fruitName': transaction.fruit,
                 'weightKg': weightKg,
                 'weightGrams': (weightKg * 1000).round(),
-                'totalPriceCentavos': _parsePesoAmount(transaction.price),
+                'totalPriceCentavos': transaction.totalPriceCentavos,
                 'soldAt': transaction.soldAt?.toIso8601String(),
                 'status': transaction.status,
+                'generated': transaction.isGenerated,
               };
             }).toList(),
             cameraEye: <String, Object?>{
@@ -4809,7 +4781,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               'mode': 'LAN snapshot preview through ESP32-CAM',
             },
           );
-      if (!mounted) {
+      if (!mounted || generation != _forecastGeneration) {
         return;
       }
       setState(() {
@@ -4823,7 +4795,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         onAction: quickAction ? () => _show(AppScreen.forecast) : null,
       );
     } on AiAutomationException catch (error) {
-      if (!mounted) {
+      if (!mounted || generation != _forecastGeneration) {
         return;
       }
       setState(() {
@@ -4832,7 +4804,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       });
       _toast(_latestAiError!);
     } catch (error) {
-      if (!mounted) {
+      if (!mounted || generation != _forecastGeneration) {
         return;
       }
       setState(() {
@@ -5039,6 +5011,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   String _forecastConnectionMessage(String error) {
     final String cleanError = error.toLowerCase();
     developer.log('Forecast unavailable: $error', name: 'FruityVensAI');
+    if (cleanError.contains('forecast server unavailable')) {
+      return 'Demand forecast service is unreachable. Reconnect your phone to the computer running the service, then try again.';
+    }
     if (cleanError.contains('firebasevertexai.googleapis.com') ||
         cleanError.contains('service api') ||
         cleanError.contains('api is not enabled') ||
@@ -5146,7 +5121,16 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     final Widget scrollableContent = SingleChildScrollView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: contentPadding,
-      child: _buildScreen(),
+      child: _hasGeneratedSales && _screen == AppScreen.transactions
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                _generatedSalesNotice(),
+                SizedBox(height: 12),
+                _buildScreen(),
+              ],
+            )
+          : _buildScreen(),
     );
     final Widget screenContent = _screenSupportsPullRefresh
         ? RefreshIndicator.adaptive(
@@ -7612,7 +7596,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         ? 'Removed'
         : 'Sold';
     final TextEditingController weightController = TextEditingController(
-      text: (sale.weightGrams / 1000).toStringAsFixed(2),
+      text: (sale.weightGrams / 1000).toStringAsFixed(3),
     );
     final TextEditingController totalController = TextEditingController(
       text: _priceInputFromCentavos(sale.totalPrice),
@@ -7634,8 +7618,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               final int? totalPrice = _parsePriceInputCentavos(
                 totalController.text,
               );
-              if (weightKg == null || weightKg <= 0) {
-                _toast('Enter a valid sale weight.');
+              if (weightKg == null || !weightKg.isFinite || weightKg < 0.001) {
+                _toast('Enter a valid sale weight of at least 0.001 kg.');
                 return;
               }
               if (totalPrice == null || totalPrice <= 0) {
@@ -7843,8 +7827,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               final int? totalPrice = _parsePriceInputCentavos(
                 totalController.text,
               );
-              if (weightKg == null || weightKg <= 0) {
-                _toast('Enter a valid sale weight.');
+              if (weightKg == null || !weightKg.isFinite || weightKg < 0.001) {
+                _toast('Enter a valid sale weight of at least 0.001 kg.');
                 return;
               }
               if (totalPrice == null || totalPrice <= 0) {
@@ -8207,7 +8191,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       if (!_isSoldTransaction(transaction)) {
         return sum;
       }
-      return sum + _parsePesoAmount(transaction.price);
+      return sum + transaction.totalPriceCentavos;
     });
 
     return GestureDetector(
@@ -8433,11 +8417,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   onPriceTyped: (String value) => _setTypedPrice(fruit, value),
                   onPriceDown: () => _adjustPrice(fruit, -100),
                   onPriceUp: () => _adjustPrice(fruit, 100),
-                  onPricingUnitChanged: (String unit) {
-                    setState(() {
-                      _pricingUnits[fruit] = _normalizePricingUnit(unit);
-                    });
-                  },
                   onSave: () => _saveInventoryFruit(fruit),
                 ),
               );
@@ -8482,7 +8461,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Choose the fruits this vendor sells, including Philippine tropical options, then set the price by kg or piece.',
+                  'Choose the fruits this vendor sells, including Philippine tropical options, then set the price per kg.',
                   style: TextStyle(
                     color: AppColors.textSecondary,
                     fontSize: 12,
@@ -8733,7 +8712,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 runSpacing: 10,
                 children: <Widget>[
                   SizedBox(
-                    width: _tileWidth(constraints.maxWidth, wide ? 4 : 1, 10),
+                    width: _tileWidth(constraints.maxWidth, wide ? 3 : 1, 10),
                     child: AppDropdown(
                       value: _fruitToAdd,
                       hint: availableFruits.isEmpty
@@ -8745,20 +8724,15 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                           : (String? value) {
                               setState(() {
                                 _fruitToAdd = value;
-                                if (value != null && value.isNotEmpty) {
-                                  _newPricingUnit = _defaultPricingUnitFor(
-                                    value,
-                                  );
-                                }
                               });
                             },
                     ),
                   ),
                   SizedBox(
-                    width: _tileWidth(constraints.maxWidth, wide ? 4 : 1, 10),
+                    width: _tileWidth(constraints.maxWidth, wide ? 3 : 1, 10),
                     child: AppTextField(
                       controller: _newPriceController,
-                      label: 'Price',
+                      label: 'Price per kg',
                       hint: _isGuestSession || _isWorkerSession
                           ? 'View only'
                           : '90.00',
@@ -8772,26 +8746,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     ),
                   ),
                   SizedBox(
-                    width: _tileWidth(constraints.maxWidth, wide ? 4 : 1, 10),
-                    child: AppDropdown<String>(
-                      value: _normalizePricingUnit(_newPricingUnit),
-                      hint: 'Price unit',
-                      items: _pricingUnitOptions,
-                      itemLabel: _pricingUnitDropdownLabel,
-                      onChanged: _isGuestSession || _isWorkerSession
-                          ? null
-                          : (String? value) {
-                              if (value == null) {
-                                return;
-                              }
-                              setState(() {
-                                _newPricingUnit = _normalizePricingUnit(value);
-                              });
-                            },
-                    ),
-                  ),
-                  SizedBox(
-                    width: _tileWidth(constraints.maxWidth, wide ? 4 : 1, 10),
+                    width: _tileWidth(constraints.maxWidth, wide ? 3 : 1, 10),
                     child: PrimaryButton(
                       label: 'Add fruit',
                       icon: Icons.add_rounded,
@@ -9373,92 +9328,90 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     );
   }
 
-  Widget _marketOutlookCard() {
+  Widget _marketOutlookCard({bool embedded = false}) {
     final MarketOutlookDataset? dataset = _marketOutlookDataset;
     final List<FruitMarketOutlook> visibleOutlooks = _visibleMarketOutlooks;
     final int totalOutlooks = _orderedMarketOutlooks.length;
-    return AppCard(
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
+    final Widget content = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            const Expanded(child: _ForecastSectionTitle('CDO market outlook')),
+            StatusBadge.blue('PSA'),
+          ],
+        ),
+        Text(
+          'PSA history: prices through Dec 2025 - production through Q4 2025',
+          style: TextStyle(
+            color: AppColors.textSecondary,
+            fontSize: 13,
+            height: 1.35,
+          ),
+        ),
+        SizedBox(height: 10),
+        if (_marketOutlookLoading)
+          const _MarketOutlookLoadingState()
+        else if (_marketOutlookError != null)
+          _MarketOutlookErrorState(
+            message: _marketOutlookError!,
+            onRetry: () {
+              setState(() {
+                _marketOutlookDataset = null;
+              });
+              unawaited(_loadMarketOutlook());
+            },
+          )
+        else if (dataset == null || visibleOutlooks.isEmpty)
+          const _MarketOutlookLoadingState()
+        else ...<Widget>[
+          ...visibleOutlooks.map((FruitMarketOutlook outlook) {
+            return _MarketOutlookRow(
+              fruitName: outlook.fruitName,
+              priceText: _marketPriceText(outlook.price),
+              supplyText: _marketSupplyText(outlook.supply),
+              sourceText: _marketSourceText(outlook),
+              badge: _marketOutlookBadge(outlook),
+            );
+          }),
+          SizedBox(height: 8),
           Row(
             children: <Widget>[
-              const Expanded(
-                child: _ForecastSectionTitle('CDO market outlook'),
-              ),
-              StatusBadge.blue('PSA'),
-            ],
-          ),
-          Text(
-            'PSA history: prices through Dec 2025 - production through Q4 2025',
-            style: TextStyle(
-              color: AppColors.textSecondary,
-              fontSize: 13,
-              height: 1.35,
-            ),
-          ),
-          SizedBox(height: 10),
-          if (_marketOutlookLoading)
-            const _MarketOutlookLoadingState()
-          else if (_marketOutlookError != null)
-            _MarketOutlookErrorState(
-              message: _marketOutlookError!,
-              onRetry: () {
-                setState(() {
-                  _marketOutlookDataset = null;
-                });
-                unawaited(_loadMarketOutlook());
-              },
-            )
-          else if (dataset == null || visibleOutlooks.isEmpty)
-            const _MarketOutlookLoadingState()
-          else ...<Widget>[
-            ...visibleOutlooks.map((FruitMarketOutlook outlook) {
-              return _MarketOutlookRow(
-                fruitName: outlook.fruitName,
-                priceText: _marketPriceText(outlook.price),
-                supplyText: _marketSupplyText(outlook.supply),
-                sourceText: _marketSourceText(outlook),
-                badge: _marketOutlookBadge(outlook),
-              );
-            }),
-            SizedBox(height: 8),
-            Row(
-              children: <Widget>[
-                Expanded(
-                  child: Text(
-                    '${formatNumber(dataset.recordCount)} official records - ${dataset.location}',
-                    style: TextStyle(
-                      color: AppColors.textMuted,
-                      fontSize: 11,
-                      height: 1.3,
-                    ),
+              Expanded(
+                child: Text(
+                  '${formatNumber(dataset.recordCount)} official records - ${dataset.location}',
+                  style: TextStyle(
+                    color: AppColors.textMuted,
+                    fontSize: 11,
+                    height: 1.3,
                   ),
                 ),
-                if (totalOutlooks > 6)
-                  TextButton.icon(
-                    onPressed: () {
-                      setState(() {
-                        _showAllMarketOutlooks = !_showAllMarketOutlooks;
-                      });
-                    },
-                    icon: Icon(
-                      _showAllMarketOutlooks
-                          ? Icons.expand_less_rounded
-                          : Icons.expand_more_rounded,
-                      size: 18,
-                    ),
-                    label: Text(
-                      _showAllMarketOutlooks ? 'Show less' : 'Show all',
-                    ),
+              ),
+              if (totalOutlooks > 6)
+                TextButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      _showAllMarketOutlooks = !_showAllMarketOutlooks;
+                    });
+                  },
+                  icon: Icon(
+                    _showAllMarketOutlooks
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded,
+                    size: 18,
                   ),
-              ],
-            ),
-          ],
+                  label: Text(
+                    _showAllMarketOutlooks ? 'Show less' : 'Show all',
+                  ),
+                ),
+            ],
+          ),
         ],
-      ),
+      ],
     );
+    return embedded
+        ? content
+        : AppCard(padding: const EdgeInsets.all(14), child: content);
   }
 
   String? _marketPriceText(MarketSignal? signal) {
@@ -9522,8 +9475,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        _marketOutlookCard(),
-        SizedBox(height: 12),
         AppCard(
           padding: const EdgeInsets.all(14),
           child: Column(
@@ -9579,7 +9530,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                       (_isGuestSession
                           ? 'Demo forecast preview only.'
                           : !_vendorForecastReady
-                          ? 'Collecting genuine sales history: $_observedVendorSalesDays of $_minimumVendorForecastDays selling days recorded.'
+                          ? 'Collecting sales history: $_observedVendorSalesDays of $_minimumVendorForecastDays selling days recorded.'
                           : 'Ready to forecast from current sales data.'),
                   style: TextStyle(
                     color: _latestAiError == null
@@ -9636,7 +9587,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                 forecastChart.hasSales
                     ? (_isGuestSession
                           ? 'Demo projection for ${forecastChart.periodLabel}, from sample sales only.'
-                          : 'Model projection for ${forecastChart.periodLabel}, based on genuine sales history.')
+                          : 'Model projection for ${forecastChart.periodLabel}, based on sales history.')
                     : _forecastChartEmptyMessage(),
                 style: TextStyle(
                   color: AppColors.textSecondary,
@@ -9709,6 +9660,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     badge: item.badge,
                   );
                 }),
+              SizedBox(height: 12),
+              Divider(color: AppColors.borderSoft),
+              SizedBox(height: 12),
+              _marketOutlookCard(embedded: true),
             ],
           ),
         ),
@@ -9721,7 +9676,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       return 'No demo sales to project yet.';
     }
     if (!_vendorForecastReady) {
-      return 'Daily projections unlock after $_minimumVendorForecastDays genuine selling days.';
+      return 'Daily projections unlock after $_minimumVendorForecastDays selling days.';
     }
     if (_latestAiForecast == null) {
       return 'Generate a vendor forecast to view daily projections.';
@@ -9734,7 +9689,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       return 'No demo sales pattern yet.';
     }
     if (!_vendorForecastReady) {
-      return 'Actions unlock after $_minimumVendorForecastDays genuine selling days.';
+      return 'Actions unlock after $_minimumVendorForecastDays selling days.';
     }
     return 'Generate a vendor forecast to view demand actions.';
   }
@@ -9753,8 +9708,11 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                     prediction.fruit.isNotEmpty &&
                     prediction.dailyPredictions.isNotEmpty,
               )
-              .take(AppColors.chartColors.length)
-              .toList();
+              .toList()
+            ..sort(
+              (AiForecastPrediction a, AiForecastPrediction b) =>
+                  b.predictedKgTotal.compareTo(a.predictedKgTotal),
+            );
       if (predictions.isEmpty) {
         return _ForecastChartData.empty();
       }
@@ -9774,23 +9732,46 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         final DateTime forecastDate = forecastStart.add(Duration(days: index));
         return '${dayNames[forecastDate.weekday - 1]}\n${monthNames[forecastDate.month - 1]} ${forecastDate.day}';
       });
-      final DateTime? lastUpdated = _realTransactionHistory
+      final DateTime? lastUpdated = _activeTransactionHistory
           .where(_isSoldTransaction)
           .map((TransactionData transaction) => transaction.soldAt)
           .whereType<DateTime>()
           .fold<DateTime?>(null, (DateTime? latest, DateTime soldAt) {
             return latest == null || soldAt.isAfter(latest) ? soldAt : latest;
           });
+      final bool groupOther = predictions.length > AppColors.chartColors.length;
+      final int individualCount = groupOther
+          ? AppColors.chartColors.length - 1
+          : predictions.length;
+      final List<String> fruitLabels = predictions
+          .take(individualCount)
+          .map((AiForecastPrediction prediction) => prediction.fruit)
+          .toList();
+      final List<List<num>> series = predictions
+          .take(individualCount)
+          .map<List<num>>(
+            (AiForecastPrediction prediction) =>
+                List<num>.of(prediction.dailyPredictions.take(horizon)),
+          )
+          .toList();
+      if (groupOther) {
+        fruitLabels.add('Other');
+        series.add(
+          List<num>.generate(horizon, (int index) {
+            return predictions
+                .skip(individualCount)
+                .fold<double>(
+                  0,
+                  (double sum, AiForecastPrediction prediction) =>
+                      sum + prediction.dailyPredictions[index],
+                );
+          }),
+        );
+      }
       return _ForecastChartData(
         labels: labels,
-        fruitLabels: predictions
-            .map((AiForecastPrediction prediction) => prediction.fruit)
-            .toList(),
-        series: predictions.map((AiForecastPrediction prediction) {
-          return prediction.dailyPredictions.take(horizon).map((double value) {
-            return double.parse(value.toStringAsFixed(1));
-          }).toList();
-        }).toList(),
+        fruitLabels: fruitLabels,
+        series: series,
         analyzedCount:
             forecast?.coverage?.transactionCount ?? _soldVendorTransactionCount,
         lastUpdated: lastUpdated,
@@ -9816,7 +9797,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       final DateTime soldAt =
           transaction.soldAt ?? now.subtract(Duration(days: analyzedCount % 7));
 
-      final double weightKg = _parseKgAmount(transaction.weight);
+      final double weightKg = transaction.weightKg;
       if (weightKg <= 0) {
         continue;
       }
@@ -9906,8 +9887,14 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     );
     final Map<String, int> revenueByFruit = <String, int>{};
     final Map<String, double> weightByFruit = <String, double>{};
+    final Map<String, int> salesCountByFruit = <String, int>{};
 
     for (final _AnalyticsSale sale in sales) {
+      salesCountByFruit.update(
+        sale.fruit,
+        (int count) => count + 1,
+        ifAbsent: () => 1,
+      );
       revenueByFruit.update(
         sale.fruit,
         (int value) => value + sale.revenuePhp,
@@ -9929,21 +9916,38 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             }
             return a.key.compareTo(b.key);
           });
+    final bool groupOther = rankedFruits.length > AppColors.chartColors.length;
+    final int individualCount = groupOther
+        ? AppColors.chartColors.length - 1
+        : rankedFruits.length;
     final List<String> shareLabels = rankedFruits
-        .take(AppColors.chartColors.length)
+        .take(individualCount)
         .map((MapEntry<String, int> entry) => entry.key)
         .toList();
     final List<int> shareValues = rankedFruits
-        .take(AppColors.chartColors.length)
+        .take(individualCount)
         .map((MapEntry<String, int> entry) => entry.value)
         .toList();
+    if (groupOther) {
+      shareLabels.add('Other');
+      shareValues.add(
+        rankedFruits
+            .skip(individualCount)
+            .fold<int>(
+              0,
+              (int sum, MapEntry<String, int> entry) => sum + entry.value,
+            ),
+      );
+    }
     final Map<String, List<int>> revenueByBucket = <String, List<int>>{
       for (final String fruit in shareLabels)
         fruit: List<int>.filled(buckets.labels.length, 0),
     };
 
     for (final _AnalyticsSale sale in sales) {
-      final List<int>? fruitSeries = revenueByBucket[sale.fruit];
+      final List<int>? fruitSeries =
+          revenueByBucket[sale.fruit] ??
+          (groupOther ? revenueByBucket['Other'] : null);
       if (fruitSeries == null) {
         continue;
       }
@@ -9967,6 +9971,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     ) {
       return AnalyticsMovement(
         name: entry.key,
+        salesCount: salesCountByFruit[entry.key] ?? 0,
         weightKg: weightByFruit[entry.key] ?? 0,
         revenuePhp: entry.value,
       );
@@ -9984,6 +9989,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       shareLabels: shareLabels,
       shareValues: shareValues,
       movements: movements,
+      transactionCount: sales.length,
       hasSales: hasSales,
       revenue: money(totalRevenue),
       periodLabel: buckets.periodLabel,
@@ -9998,6 +10004,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       chartSub: hasSales
           ? (_isGuestSession
                 ? 'Demo analytics from sample sales only'
+                : groupOther
+                ? 'Sales by fruit; smaller categories are grouped as Other'
                 : 'Sales breakdown by fruit')
           : 'No sales in this range yet',
       contextText: buckets.contextText,
@@ -10030,8 +10038,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       if (range.endExclusive != null && !soldAt.isBefore(range.endExclusive!)) {
         continue;
       }
-      final int revenuePhp = _parsePesoAmount(transaction.price);
-      final double weightKg = _parseKgAmount(transaction.weight);
+      final int revenuePhp = transaction.totalPriceCentavos;
+      final double weightKg = transaction.weightKg;
       if (revenuePhp <= 0 && weightKg <= 0) {
         continue;
       }
@@ -10208,7 +10216,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
               data.periodLabel,
               valueColor: AppColors.orangeText,
             ),
-            MetricData('Units sold', data.unitsSold, 'Across all fruits'),
+            MetricData('Weight sold', data.unitsSold, 'Across all fruits'),
             MetricData(
               'Best seller',
               data.bestSeller,
@@ -10252,6 +10260,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             ],
           ),
         ),
+        SizedBox(height: 12),
+        _analyticsSalesCounts(data),
         SizedBox(height: 12),
         _analyticsInsightToggle(data),
         if (_showAnalyticsDetails) ...<Widget>[
@@ -10317,6 +10327,56 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           ),
         ],
       ],
+    );
+  }
+
+  Widget _analyticsSalesCounts(AnalyticsData data) {
+    final List<AnalyticsMovement> fruits =
+        List<AnalyticsMovement>.of(data.movements)..sort((a, b) {
+          final int countOrder = b.salesCount.compareTo(a.salesCount);
+          return countOrder == 0 ? a.name.compareTo(b.name) : countOrder;
+        });
+    return AppCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const SectionTitle('Sales by fruit'),
+          Text(
+            '${formatNumber(data.transactionCount)} completed sales - ${data.periodLabel}',
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+          ),
+          SizedBox(height: 10),
+          if (fruits.isEmpty)
+            const _AnalyticsEmptyState(
+              message: 'No completed sales in this range.',
+            ),
+          ...fruits.map(
+            (fruit) => Padding(
+              key: ValueKey<String>('analytics-sales-count-${fruit.name}'),
+              padding: const EdgeInsets.symmetric(vertical: 7),
+              child: Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Text(
+                      fruit.name,
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                  ),
+                  Text(
+                    '${formatNumber(fruit.salesCount)} ${fruit.salesCount == 1 ? 'sale' : 'sales'}',
+                    style: TextStyle(
+                      color: AppColors.orangeText,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -10888,15 +10948,65 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     required String title,
     List<Widget> actions = const <Widget>[],
   }) {
-    return _centeredScreenNav(
-      title: title,
-      onBack: () => _show(AppScreen.dashboard),
-      titleSidePadding: actions.length > 2
-          ? 148
-          : actions.length > 1
-          ? 108
-          : 56,
-      trailing: actions,
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final TextStyle titleStyle = DefaultTextStyle.of(context).style.merge(
+          const TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 0,
+          ),
+        );
+        final TextPainter titlePainter = TextPainter(
+          text: TextSpan(text: title, style: titleStyle),
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+          maxLines: 1,
+        )..layout();
+        final double titleWidth = titlePainter.width.ceilToDouble();
+        titlePainter.dispose();
+        final double actionsWidth = actions.isEmpty
+            ? 0
+            : actions.length * 38.0 + (actions.length - 1) * 8.0;
+        final bool separateActions =
+            actions.isNotEmpty &&
+            constraints.maxWidth < 38 + 10 + titleWidth + 10 + actionsWidth;
+        final Widget actionButtons = Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          alignment: WrapAlignment.end,
+          children: actions,
+        );
+        final Widget titleRow = ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 42),
+          child: Row(
+            children: <Widget>[
+              _topBarIconButton(
+                tooltip: 'Back',
+                icon: Icons.arrow_back_rounded,
+                onPressed: () => _show(AppScreen.dashboard),
+              ),
+              const SizedBox(width: 10),
+              Expanded(child: Text(title, style: titleStyle)),
+              if (actions.isNotEmpty && !separateActions) ...<Widget>[
+                const SizedBox(width: 10),
+                actionButtons,
+              ],
+            ],
+          ),
+        );
+        if (!separateActions) {
+          return titleRow;
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            titleRow,
+            const SizedBox(height: 8),
+            actionButtons,
+          ],
+        );
+      },
     );
   }
 
@@ -10911,14 +11021,12 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           highlighted: true,
           onPressed: () => unawaited(_showAddSaleDialog()),
         ),
-        SizedBox(width: 8),
         _topBarIconButton(
           tooltip: 'Pick history date',
           icon: Icons.calendar_month_rounded,
           onPressed: () => unawaited(_pickHistoryDate()),
         ),
         if (!selectedToday) ...<Widget>[
-          SizedBox(width: 8),
           _topBarIconButton(
             tooltip: 'Show today',
             icon: Icons.today_rounded,
@@ -11290,6 +11398,8 @@ class TransactionData {
     this.soldAt,
     this.saleId,
     this.cloudId,
+    this.weightGrams,
+    this.totalPrice,
   });
 
   final String fruit;
@@ -11301,6 +11411,15 @@ class TransactionData {
   final DateTime? soldAt;
   final int? saleId;
   final String? cloudId;
+  final int? weightGrams;
+  final int? totalPrice;
+
+  double get weightKg =>
+      weightGrams == null ? _parseKgAmount(weight) : weightGrams! / 1000;
+
+  int get totalPriceCentavos => totalPrice ?? _parsePesoAmount(price);
+
+  bool get isGenerated => cloudId?.startsWith('sample_cdo_') ?? false;
 }
 
 class DashboardStats {
@@ -11505,6 +11624,7 @@ class AnalyticsData {
     required this.shareLabels,
     required this.shareValues,
     required this.movements,
+    required this.transactionCount,
     required this.hasSales,
     required this.revenue,
     required this.periodLabel,
@@ -11523,6 +11643,7 @@ class AnalyticsData {
   final List<String> shareLabels;
   final List<int> shareValues;
   final List<AnalyticsMovement> movements;
+  final int transactionCount;
   final bool hasSales;
   final String revenue;
   final String periodLabel;
@@ -11539,11 +11660,13 @@ class AnalyticsData {
 class AnalyticsMovement {
   const AnalyticsMovement({
     required this.name,
+    required this.salesCount,
     required this.weightKg,
     required this.revenuePhp,
   });
 
   final String name;
+  final int salesCount;
   final double weightKg;
   final int revenuePhp;
 
@@ -11669,7 +11792,9 @@ int? _parsePriceInputCentavos(String value) {
 }
 
 int _parsePesoAmount(String value) {
-  final RegExpMatch? match = RegExp(r'\d+(?:\.\d+)?').firstMatch(value);
+  final RegExpMatch? match = RegExp(
+    r'\d+(?:\.\d+)?',
+  ).firstMatch(value.replaceAll(',', ''));
   if (match == null) {
     return 0;
   }
@@ -11685,15 +11810,17 @@ double _parseKgAmount(String value) {
 }
 
 String _formatWeight(int grams) {
-  final double kg = grams / 1000;
-  return '${kg.toStringAsFixed(kg >= 10 ? 0 : 1)} kg';
+  return _formatKgValue(grams / 1000);
 }
 
 String _formatKgValue(double kg) {
   if (kg <= 0) {
     return '0 kg';
   }
-  return '${kg.toStringAsFixed(kg >= 10 ? 0 : 1)} kg';
+  final String value = kg
+      .toStringAsFixed(3)
+      .replaceFirst(RegExp(r'\.?0+$'), '');
+  return '$value kg';
 }
 
 String _formatChartNumber(num value) {
@@ -13794,7 +13921,6 @@ class _InventoryFruitCard extends StatelessWidget {
     required this.onPriceTyped,
     required this.onPriceDown,
     required this.onPriceUp,
-    required this.onPricingUnitChanged,
     required this.onSave,
   });
 
@@ -13811,7 +13937,6 @@ class _InventoryFruitCard extends StatelessWidget {
   final ValueChanged<String> onPriceTyped;
   final VoidCallback onPriceDown;
   final VoidCallback onPriceUp;
-  final ValueChanged<String> onPricingUnitChanged;
   final VoidCallback onSave;
 
   @override
@@ -13889,60 +14014,25 @@ class _InventoryFruitCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 SizedBox(height: 10),
-                LayoutBuilder(
-                  builder: (BuildContext context, BoxConstraints constraints) {
-                    final bool wide = constraints.maxWidth >= 520;
-                    final Widget priceInput = SmartStepper(
-                      label: _priceEntryLabelForUnit(pricingUnit),
-                      value: price > 0 ? money(price) : 'Set price',
-                      controller: priceController,
-                      focusNode: priceFocusNode,
-                      hint: '90.00',
-                      suffixText: '/${_pricingUnitShortName(pricingUnit)}',
-                      enabled: !readOnly,
-                      onChanged: onPriceTyped,
-                      onSubmitted: (_) => onSave(),
-                      textInputAction: TextInputAction.done,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      inputFormatters: <TextInputFormatter>[
-                        FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
-                      ],
-                      onMinus: readOnly ? null : onPriceDown,
-                      onPlus: readOnly ? null : onPriceUp,
-                    );
-                    final Widget unitSelector = AppDropdown<String>(
-                      value: _normalizePricingUnit(pricingUnit),
-                      items: _pricingUnitOptions,
-                      itemLabel: _pricingUnitDropdownLabel,
-                      onChanged: readOnly
-                          ? null
-                          : (String? value) {
-                              if (value == null) {
-                                return;
-                              }
-                              onPricingUnitChanged(value);
-                            },
-                    );
-                    if (wide) {
-                      return Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          Expanded(flex: 2, child: priceInput),
-                          SizedBox(width: 8),
-                          SizedBox(width: 140, child: unitSelector),
-                        ],
-                      );
-                    }
-                    return Column(
-                      children: <Widget>[
-                        priceInput,
-                        SizedBox(height: 8),
-                        unitSelector,
-                      ],
-                    );
-                  },
+                SmartStepper(
+                  label: _priceEntryLabelForUnit(pricingUnit),
+                  value: price > 0 ? money(price) : 'Set price',
+                  controller: priceController,
+                  focusNode: priceFocusNode,
+                  hint: '90.00',
+                  suffixText: '/${_pricingUnitShortName(pricingUnit)}',
+                  enabled: !readOnly,
+                  onChanged: onPriceTyped,
+                  onSubmitted: (_) => onSave(),
+                  textInputAction: TextInputAction.done,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  inputFormatters: <TextInputFormatter>[
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                  ],
+                  onMinus: readOnly ? null : onPriceDown,
+                  onPlus: readOnly ? null : onPriceUp,
                 ),
                 SizedBox(height: 8),
                 if (readOnly)
@@ -14371,6 +14461,13 @@ class HistoryTransactionCard extends StatelessWidget {
                     fontSize: 12,
                   ),
                 ),
+                if (transaction.isGenerated) ...<Widget>[
+                  SizedBox(height: 2),
+                  Text(
+                    'Generated CDO sale',
+                    style: TextStyle(color: AppColors.textMuted, fontSize: 11),
+                  ),
+                ],
               ],
             ),
           ),

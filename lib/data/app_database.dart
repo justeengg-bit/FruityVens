@@ -3,13 +3,7 @@ import 'dart:convert';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
-String _pricingUnitValue(Object? value) {
-  final String clean = (value ?? '').toString().trim().toLowerCase();
-  if (clean == 'piece' || clean == 'pc' || clean == 'each') {
-    return 'piece';
-  }
-  return 'kg';
-}
+String _pricingUnitValue(Object? _) => 'kg';
 
 enum AccountRole {
   owner,
@@ -390,7 +384,7 @@ class AppDatabase {
     if (_memory) {
       opened = await openDatabase(
         inMemoryDatabasePath,
-        version: 8,
+        version: 9,
         onCreate: _createSchema,
         onUpgrade: _upgradeSchema,
       );
@@ -398,7 +392,7 @@ class AppDatabase {
       final String dbPath = await getDatabasesPath();
       opened = await openDatabase(
         p.join(dbPath, 'fruityvens.sqlite'),
-        version: 8,
+        version: 9,
         onCreate: _createSchema,
         onUpgrade: _upgradeSchema,
       );
@@ -547,6 +541,9 @@ class AppDatabase {
     }
     if (oldVersion < 8) {
       await _createMarketHistorySchema(db);
+    }
+    if (oldVersion < 9) {
+      await db.execute("UPDATE local_fruits SET price_unit = 'kg'");
     }
     await db.execute(
       'CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_transactions_cloud_id '
@@ -1164,6 +1161,88 @@ class AppDatabase {
           '{"fruitName":"$fruitName","weightGrams":$weightGrams,"unitPrice":$unitPrice,"totalPrice":$totalPrice,"status":"$status","soldAt":"${effectiveSoldAt.toIso8601String()}"}',
     );
     return id;
+  }
+
+  /// Add generated history atomically, preserving existing sales and corrections.
+  /// Stable sample IDs make a repeated import safe after an app restart.
+  Future<int> importGeneratedSales(List<LocalSale> sales) async {
+    final Map<String, LocalSale> unique = <String, LocalSale>{};
+    for (final LocalSale sale in sales) {
+      final String? cloudId = sale.cloudId;
+      if (cloudId == null ||
+          !cloudId.startsWith('sample_cdo_') ||
+          sale.fruitName.trim().isEmpty ||
+          sale.weightGrams <= 0 ||
+          sale.unitPrice <= 0 ||
+          sale.totalPrice !=
+              (sale.weightGrams * sale.unitPrice / 1000).round() ||
+          sale.status != 'sold') {
+        throw const FormatException('Invalid generated sales record.');
+      }
+      unique.putIfAbsent(cloudId, () => sale);
+    }
+    if (_memory) {
+      final Set<String?> existing = _memorySales
+          .map((sale) => sale.cloudId)
+          .toSet();
+      int added = 0;
+      for (final LocalSale sale in unique.values) {
+        if (existing.contains(sale.cloudId)) {
+          continue;
+        }
+        await addSale(
+          cloudId: sale.cloudId,
+          fruitName: sale.fruitName,
+          weightGrams: sale.weightGrams,
+          unitPrice: sale.unitPrice,
+          totalPrice: sale.totalPrice,
+          status: sale.status,
+          soldAt: sale.soldAt,
+        );
+        added++;
+      }
+      _memorySales.sort((a, b) => b.soldAt.compareTo(a.soldAt));
+      return added;
+    }
+    final Database db = await _database;
+    return db.transaction<int>((Transaction txn) async {
+      final List<Map<String, Object?>> rows = await txn.query(
+        'sales_transactions',
+        columns: <String>['cloud_id'],
+      );
+      final Set<Object?> existing = rows.map((row) => row['cloud_id']).toSet();
+      final List<LocalSale> pending = unique.values
+          .where((sale) => !existing.contains(sale.cloudId))
+          .toList();
+      final Batch insertBatch = txn.batch();
+      for (final LocalSale sale in pending) {
+        insertBatch.insert('sales_transactions', <String, Object?>{
+          'cloud_id': sale.cloudId,
+          'fruit_name': sale.fruitName,
+          'weight_grams': sale.weightGrams,
+          'unit_price': sale.unitPrice,
+          'total_price': sale.totalPrice,
+          'status': sale.status,
+          'sold_at': sale.soldAt.toIso8601String(),
+          'synced': 0,
+        });
+      }
+      final List<Object?> ids = await insertBatch.commit();
+      final Batch queueBatch = txn.batch();
+      for (int i = 0; i < pending.length; i++) {
+        final LocalSale sale = pending[i];
+        queueBatch.insert('sync_queue', <String, Object?>{
+          'entity_type': 'transaction',
+          'entity_id': ids[i].toString(),
+          'action': 'insert',
+          'payload': jsonEncode(sale.toCloudMap(cloudId: sale.cloudId!)),
+          'attempts': 0,
+          'created_at': DateTime.now().toIso8601String(),
+        });
+      }
+      await queueBatch.commit(noResult: true);
+      return pending.length;
+    });
   }
 
   Future<List<LocalSale>> getSalesTransactions({int? limit}) async {

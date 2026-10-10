@@ -89,8 +89,11 @@ class CameraEyeStatus {
 class CameraEyeService {
   const CameraEyeService();
 
-  static const String ssid = 'Parafiber_F0C0 2.4G';
-  static const String host = '192.168.1.34';
+  static const String ssid = 'Aida_iPhone';
+  static const String host = String.fromEnvironment(
+    'FRUITYVENS_CAMERA_HOST',
+    defaultValue: '172.20.10.5',
+  );
   static const String baseUrl = 'http://$host';
   static const String snapshotUrl = '$baseUrl/snapshot.jpg';
   static const String streamUrl = snapshotUrl;

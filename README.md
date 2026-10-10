@@ -90,6 +90,11 @@ the workstation server:
 adb reverse tcp:8787 tcp:8787
 ```
 
+Keep the forecast server running while using Generate forecast. Starting Flutter
+alone does not start this Python service. After reconnecting the phone by USB,
+run the forwarding command again. This local setup needs the computer and USB
+connection; use a hosted forecast URL for forecasting away from the computer.
+
 For a production-like Firebase setup, download a Firebase Admin SDK service
 account JSON, keep it local, and start the server with:
 
@@ -231,15 +236,15 @@ flutter build apk --debug --dart-define=FRUITYVENS_AI_BASE_URL=http://YOUR_PC_IP
 
 The app and ESP32-CAM connect to the same local router:
 
-- Router SSID: `Parafiber_F0C0 2.4G`
-- Camera address: `http://192.168.1.34`
-- Snapshot endpoint: `http://192.168.1.34/snapshot.jpg`
-- Health endpoint: `http://192.168.1.34/status`
+- Hotspot SSID: `Aida_iPhone`
+- Camera address: `http://172.20.10.5`
+- Snapshot endpoint: `http://172.20.10.5/snapshot.jpg`
+- Health endpoint: `http://172.20.10.5/status`
 - Preview controls: `/preview/start` and `/preview/stop`
 
-Set `WIFI_PASSWORD` in `ESP32_CAM_Stream/ESP32_CAM_Stream.ino` before flashing.
-The router should reserve `192.168.1.34` for the ESP32-CAM so another device
-cannot receive the same address.
+The app defaults to the camera's previously observed hotspot address,
+`172.20.10.5`. If the hotspot assigns another address, rebuild with
+`--dart-define=FRUITYVENS_CAMERA_HOST=THE_NEW_IP`.
 
 ## Local Files Not Committed
 

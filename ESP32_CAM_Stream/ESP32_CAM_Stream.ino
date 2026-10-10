@@ -5,14 +5,14 @@
 //  Arduino IDE board: "AI Thinker ESP32-CAM"
 //  Mode: Wi-Fi station + camera endpoints for the Flutter app
 //
-//  Wi-Fi SSID: Parafiber_F0C0 2.4G
-//  Camera IP: 192.168.1.34
+//  Wi-Fi SSID: Aida_iPhone
+//  Camera IP: 172.20.10.5
 //
 //  Flutter-compatible endpoints:
-//    http://192.168.1.34/snapshot.jpg
-//    http://192.168.1.34/status
-//    http://192.168.1.34/preview/start
-//    http://192.168.1.34/preview/stop
+//    http://172.20.10.5/snapshot.jpg
+//    http://172.20.10.5/status
+//    http://172.20.10.5/preview/start
+//    http://172.20.10.5/preview/stop
 //
 //  No hosted web page is served. The camera is used as an eye for
 //  FruityVens/backend AI only.
@@ -23,15 +23,15 @@
 #include <WiFi.h>
 
 // ------------------------------------------------------------
-//  Router credentials. Replace WIFI_PASSWORD before flashing.
+//  Hotspot credentials.
 // ------------------------------------------------------------
-const char* WIFI_SSID = "Parafiber_F0C0 2.4G";
-const char* WIFI_PASSWORD = "CHANGE_ME";
+const char* WIFI_SSID = "Aida_iPhone";
+const char* WIFI_PASSWORD = "1234567899";
 
-IPAddress LOCAL_IP(192, 168, 1, 34);
-IPAddress GATEWAY(192, 168, 1, 1);
-IPAddress SUBNET(255, 255, 255, 0);
-IPAddress DNS(192, 168, 1, 1);
+IPAddress LOCAL_IP(172, 20, 10, 5);
+IPAddress GATEWAY(172, 20, 10, 1);
+IPAddress SUBNET(255, 255, 255, 240);
+IPAddress DNS(172, 20, 10, 1);
 
 // ------------------------------------------------------------
 //  DIYMORE ESP32-CAM (CH340X) pin map
@@ -171,8 +171,8 @@ bool startCameraEyeEndpoints() {
   httpd_register_uri_handler(camera_httpd, &preview_stop_uri);
 
   Serial.println("[HTTP] Camera endpoints ready on port 80");
-  Serial.println("[HTTP] Snapshot: http://192.168.1.34/snapshot.jpg");
-  Serial.println("[HTTP] Status:   http://192.168.1.34/status");
+  Serial.println("[HTTP] Snapshot: http://172.20.10.5/snapshot.jpg");
+  Serial.println("[HTTP] Status:   http://172.20.10.5/status");
   return true;
 }
 
@@ -286,7 +286,7 @@ void setup() {
     return;
   }
 
-  Serial.println("[READY] Camera available at http://192.168.1.34");
+  Serial.println("[READY] Camera available at http://172.20.10.5");
 }
 
 void loop() {
