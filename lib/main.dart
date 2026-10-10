@@ -4974,7 +4974,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           return _ForecastRecommendation(
             fruitName: prediction.fruit,
             title: '$recommendation ${prediction.fruit}',
-            detail: simpleDetail,
+            detail: prediction.reason.trim().isEmpty
+                ? simpleDetail
+                : '$simpleDetail ${prediction.reason.trim()}',
             value: recommendation,
             note: 'Forecast action',
             badge: _forecastPredictionBadge(recommendation),
@@ -5039,6 +5041,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   String _forecastConnectionMessage(String error) {
     final String cleanError = error.toLowerCase();
     developer.log('Forecast unavailable: $error', name: 'FruityVensAI');
+    if (cleanError.contains('forecast server unavailable')) {
+      return 'The online forecast service could not be reached. Check your internet connection and try again. The service may take a little longer to start after being idle.';
+    }
     if (cleanError.contains('firebasevertexai.googleapis.com') ||
         cleanError.contains('service api') ||
         cleanError.contains('api is not enabled') ||
@@ -5073,7 +5078,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         cleanError.contains('connection') ||
         cleanError.contains('network') ||
         cleanError.contains('internet')) {
-      return 'FruityVens could not reach Firebase AI. If your internet is already on, check Firebase AI Logic or App Check setup, then try Generate again.';
+      return 'FruityVens could not reach the online forecast service. Check your internet connection and try again.';
     }
     return 'Forecasting is unavailable right now. Check Firebase AI setup or your connection, then try again.';
   }
@@ -9595,6 +9600,28 @@ class _FruityVensHomeState extends State<FruityVensHome> {
                   'Source: ${_latestAiForecast!.sourceLabel}',
                   style: TextStyle(color: AppColors.textMuted, fontSize: 12),
                 ),
+                if (_latestAiForecast!.validation
+                    case final AiForecastValidation validation)
+                  if (validation.evaluatedDays > 0 &&
+                      validation.maeKg != null) ...<Widget>[
+                    SizedBox(height: 4),
+                    Text(
+                      'Historical check: ${validation.maeKg!.toStringAsFixed(2)} kg average error per fruit/day over ${validation.evaluatedDays} days.',
+                      style: TextStyle(
+                        color: AppColors.textMuted,
+                        fontSize: 12,
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
+                if (_latestAiForecast!.explanationModel
+                    case final String explanationModel) ...<Widget>[
+                  SizedBox(height: 4),
+                  Text(
+                    'Advice: $explanationModel',
+                    style: TextStyle(color: AppColors.textMuted, fontSize: 12),
+                  ),
+                ],
                 if (_forecastCoverageLabel(_latestAiForecast!)
                     case final String coverageLabel) ...<Widget>[
                   SizedBox(height: 4),
@@ -9742,7 +9769,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   _ForecastChartData _forecastChartData() {
     final DateTime now = DateTime.now();
     final DateTime today = DateTime(now.year, now.month, now.day);
-    final DateTime forecastStart = today.add(const Duration(days: 1));
+    final DateTime forecastStart = !_isGuestSession
+        ? _latestAiForecast?.forecastStart ?? today.add(const Duration(days: 1))
+        : today.add(const Duration(days: 1));
 
     if (!_isGuestSession) {
       final AiAutomationResult? forecast = _latestAiForecast;

@@ -62,11 +62,27 @@ Keep Firebase service account keys, App Check debug tokens, database export
 secrets, and private admin SDK files out of GitHub. Also make sure Firebase
 rules only allow each signed-in user to access the data they own.
 
-## Gradient Boosting Forecast Server
+## Seasonal Demand Forecast Server
 
 FruityVens can use a Python sales-forecasting server before falling back to
-Firebase AI. The server trains a `GradientBoostingRegressor` from transaction
-history and returns predicted restock demand for the next 7 days.
+Firebase AI. The server trains an `XGBRegressor` from dated transaction
+history, recent sales, calendar features, and historical PSA price/supply
+seasonality. It compares recursive forecasts against weekly seasonal naive and
+recent-average forecasts on earlier dates, then uses the model with the lowest
+validation error for the next 7 days. The response includes validation error,
+the exact forecast dates, and historical seasonal context for each fruit.
+
+The app defaults to `https://fruityvens.onrender.com`; normal forecasting needs
+internet access, with no USB or computer connection. Hosted requests allow up to
+90 seconds for a Render service to wake up. Firebase AI optionally explains the
+computed recommendations; failure of that explanation does not discard the
+numeric forecast. Set `FRUITYVENS_ENABLE_FIREBASE_AI_EXPLANATION=false` to disable
+the explanation. AI never supplies or replaces the predicted quantities.
+
+See [demand forecast methodology](docs/demand_forecast_methodology.md) for data
+assumptions, seasonality, validation, and limitations. The lightweight
+PythonAnywhere server remains a separate recent-sales fallback; it does not
+implement XGBoost or the PSA seasonal features.
 
 Install the forecast-only Python dependencies from the project root. This avoids
 downloading the larger YOLO/Torch camera stack:
@@ -77,14 +93,15 @@ source .venv/bin/activate
 pip install -r requirements-forecast.txt
 ```
 
-Start the forecast server:
+For optional local development, start the forecast server:
 
 ```sh
 uvicorn tool.forecast_server:app --host 0.0.0.0 --port 8787
 ```
 
-When running on a USB-connected Android phone, forward the phone's localhost to
-the workstation server:
+Build the app with `--dart-define=FRUITYVENS_AI_BASE_URL=http://127.0.0.1:8787`
+only when testing a local backend. In that local setup, forward the USB-connected
+phone's localhost to the workstation server:
 
 ```sh
 adb reverse tcp:8787 tcp:8787
@@ -110,7 +127,7 @@ transaction snapshot so local development forecasting works.
 
 ### Render Hosting
 
-Render can host the FastAPI/scikit-learn forecast server so the app can
+Render hosts the FastAPI/XGBoost forecast server so the app can
 forecast without a local terminal server. Free Render web services spin down
 after inactivity, so the first forecast after a quiet period can take about a
 minute to wake up.
@@ -139,7 +156,8 @@ Flutter app. After Render deploys, check:
 https://YOUR-RENDER-SERVICE.onrender.com/health
 ```
 
-Build the Flutter app with the Render URL:
+The app uses `https://fruityvens.onrender.com` by default. To use a different
+Render service, build the Flutter app with its URL:
 
 ```sh
 flutter build apk --debug \
@@ -220,7 +238,7 @@ The older OpenAI proxy is still available from the project root:
 dart run tool/ai_proxy.dart
 ```
 
-The app currently points to `http://192.168.1.9:8787`. If the workstation IP
+For a local development build using `http://192.168.1.9:8787`, if the workstation IP
 changes, rebuild with:
 
 ```sh
