@@ -21,6 +21,7 @@ fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 firebase-admin>=6.5.0
 scikit-learn>=1.4.0
+xgboost-cpu>=2.1.0,<4
 joblib>=1.4.0
 
 # Optional: GPU support (uncomment if using CUDA)

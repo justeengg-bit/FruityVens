@@ -1,0 +1,26 @@
+{
+  "method": "rolling-origin recursive forecast",
+  "horizonDays": 7,
+  "evaluatedDays": 14,
+  "evaluatedFruitDays": 126,
+  "selectedModel": "Recent average",
+  "maeKg": 1.4818,
+  "wapePercent": 66.77,
+  "candidates": [
+    {
+      "model": "Weekly seasonal naive",
+      "maeKg": 2.129,
+      "wapePercent": 95.93
+    },
+    {
+      "model": "Recent average",
+      "maeKg": 1.4818,
+      "wapePercent": 66.77
+    },
+    {
+      "model": "XGBRegressor",
+      "maeKg": 1.6527,
+      "wapePercent": 74.47
+    }
+  ]
+}

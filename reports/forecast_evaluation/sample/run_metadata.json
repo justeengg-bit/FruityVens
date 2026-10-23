@@ -1,0 +1,43 @@
+{
+  "created_at": "2026-10-23T18:40:10.810806+08:00",
+  "input": "/home/marzomir/Documents/FruityVens/assets/data/cdo_sample_sales_2026.json",
+  "input_sha256": "52b6a758f4d3a624e36d7a34cae49c7b52db0cfe58e88452dd45b9effc855445",
+  "forecast_source_sha256": "bc037f4c524f43c7a8da916c743f18d3e23c5f32f5c5e7ff226dc8df8731385d",
+  "seasonality_source_sha256": "8fdba67b1b76823ebdcd5a1882893bc6a413525f11b3b90734fdcc38f80f91ac",
+  "psa_asset_sha256": "92d1ca6ce960d2de234e87c493d2ca2b4e0dd576b61cc43df077953cb09c904b",
+  "provenance": "GENERATED SAMPLE SALES \u2014 demonstration only; not measured real-world forecasting accuracy.",
+  "transaction_count": 1241,
+  "generated_transactions": 1241,
+  "fruit_count": 9,
+  "sales_start": "2026-07-01",
+  "sales_end": "2026-10-08",
+  "excluded_partial_day": "2026-10-09",
+  "development_end": "2026-09-09",
+  "learning_validation_start": "2026-09-03",
+  "test_start": "2026-09-11",
+  "test_end": "2026-10-08",
+  "test_weeks": 4,
+  "horizon_days": 7,
+  "evaluated_fruit_days": 252,
+  "selected_on_development": "Recent average",
+  "versions": {
+    "python": "3.14.0",
+    "numpy": "2.5.4",
+    "pandas": "3.1.0",
+    "xgboost": "3.4.1",
+    "matplotlib": "3.11.2"
+  },
+  "parameters": {
+    "objective": "reg:squarederror",
+    "enable_categorical": true,
+    "learning_rate": 0.05,
+    "max_depth": 3,
+    "min_child_weight": 4,
+    "n_estimators": 180,
+    "n_jobs": 2,
+    "random_state": 42,
+    "reg_alpha": 0.1,
+    "reg_lambda": 2.0,
+    "tree_method": "hist"
+  }
+}

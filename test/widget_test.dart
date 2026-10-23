@@ -1,10 +1,23 @@
-import 'package:flutter/material.dart' show DropdownButtonFormField, Switch;
+import 'package:flutter/material.dart'
+    show CalendarDatePicker, DropdownButtonFormField, Switch;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fruityvens_app/data/app_database.dart';
 import 'package:fruityvens_app/main.dart';
 import 'package:fruityvens_app/services/ai_automation_client.dart';
 import 'package:fruityvens_app/services/cdo_sample_sales_service.dart';
+import 'package:fruityvens_app/services/daily_sales_report_service.dart';
+import 'package:fruityvens_app/services/report_export_service.dart';
+
+class _CaptureReportExportService extends ReportExportService {
+  ReportExportData? report;
+
+  @override
+  Future<ReportExportResult> export(ReportExportData data) async {
+    report = data;
+    return ReportExportResult(fileName: data.fileName, path: '', saved: false);
+  }
+}
 
 class _NineFruitForecastClient extends AiAutomationClient {
   int calls = 0;
@@ -34,6 +47,16 @@ class _NineFruitForecastClient extends AiAutomationClient {
       summary: 'Nine-fruit demand forecast.',
       model: 'Regression fixture',
       source: 'Test forecast service',
+      forecastStart: DateTime(2026, 2, 16),
+      forecastEnd: DateTime(2026, 2, 22),
+      coverage: AiForecastCoverage(
+        transactionCount: 30,
+        observedDays: 30,
+        dataStart: DateTime(2026, 1, 17),
+        dataEnd: DateTime(2026, 2, 15),
+        fruits: fruits,
+      ),
+      validation: const AiForecastValidation(evaluatedDays: 14, maeKg: 0.24),
       predictions: List<AiForecastPrediction>.generate(fruits.length, (
         int fruit,
       ) {
@@ -51,7 +74,8 @@ class _NineFruitForecastClient extends AiAutomationClient {
           dailyPredictions: daily,
           recommendation: 'Light top-up',
           confidence: 'High',
-          reason: 'Regression fixture',
+          reason:
+              'Historical Q2 production in Northern Mindanao is above the annual average across six reference years.',
         );
       }),
     );
@@ -128,60 +152,226 @@ void main() {
     expect(warningCount, 1);
   }
 
-  testWidgets('Forecast renders nine fruits and preserves Other daily totals', (
-    WidgetTester tester,
-  ) async {
-    final AppDatabase database = AppDatabase.inMemory();
-    final DateTime now = DateTime.now();
-    final DateTime today = DateTime(now.year, now.month, now.day, 12);
-    for (int day = 0; day < 30; day++) {
-      await database.addSale(
-        fruitName: 'Mango',
-        weightGrams: 1000,
-        unitPrice: 6000,
-        totalPrice: 6000,
-        soldAt: today.subtract(Duration(days: day)),
-      );
-    }
-    final _NineFruitForecastClient client = _NineFruitForecastClient();
-    await tester.pumpWidget(
-      FruityVensApp(database: database, aiAutomationClient: client),
-    );
-    await createAccountAndOpenDashboard(tester);
-    await openOperationsMenu(tester);
-    await tester.tap(find.text('Generate forecast'));
-    await tester.pumpAndSettle();
-    final Finder generateButton = find.widgetWithText(
-      PrimaryButton,
-      'Generate forecast',
-    );
-    await tester.ensureVisible(generateButton);
-    await tester.pumpAndSettle();
-    await tester.tap(generateButton);
-    await tester.pumpAndSettle();
+  for (final Size viewport in <Size>[Size(360, 800), Size(900, 1000)]) {
+    testWidgets(
+      'Forecast stays readable at ${viewport.width.toInt()}px and keeps market outlook optional',
+      (WidgetTester tester) async {
+        final AppDatabase database = AppDatabase.inMemory();
+        final DateTime now = DateTime.now();
+        final DateTime today = DateTime(now.year, now.month, now.day, 12);
+        for (int day = 0; day < 30; day++) {
+          await database.addSale(
+            fruitName: 'Mango',
+            weightGrams: 1000,
+            unitPrice: 6000,
+            totalPrice: 6000,
+            soldAt: today.subtract(Duration(days: day)),
+          );
+        }
+        final _NineFruitForecastClient client = _NineFruitForecastClient();
+        await tester.pumpWidget(
+          FruityVensApp(database: database, aiAutomationClient: client),
+        );
+        await createAccountAndOpenDashboard(tester);
+        await openOperationsMenu(tester);
+        await tester.tap(find.text('Generate forecast'));
+        await tester.pumpAndSettle();
+        tester.view.physicalSize = viewport;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        await tester.pumpAndSettle();
+        final Finder generateButton = find.widgetWithText(
+          PrimaryButton,
+          'Generate forecast',
+        );
+        await tester.ensureVisible(generateButton);
+        await tester.pumpAndSettle();
+        await tester.tap(generateButton);
+        await tester.pumpAndSettle();
+        fruityVensMessengerKey.currentState?.hideCurrentSnackBar();
+        await tester.pumpAndSettle();
 
-    expect(tester.takeException(), isNull);
-    expect(client.calls, 1);
-    expect(client.transactionCount, 30);
-    expect(find.text('Nine-fruit demand forecast.'), findsOneWidget);
-    final StackedBarChart chart = tester.widget<StackedBarChart>(
-      find.byType(StackedBarChart),
+        expect(tester.takeException(), isNull);
+        expect(client.calls, 1);
+        expect(client.transactionCount, 30);
+        expect(find.text('Nine-fruit demand forecast.'), findsNothing);
+        expect(find.text('High confidence'), findsOneWidget);
+        expect(
+          find.text('333.90 kg projected across 9 fruits'),
+          findsOneWidget,
+        );
+        expect(find.text('Tomorrow'), findsNothing);
+        expect(find.text('Next 7 days'), findsNothing);
+        expect(find.text('Fruit ranking'), findsOneWidget);
+        expect(find.text('#1'), findsOneWidget);
+        expect(find.text('65.10 kg | 19.5% of forecast'), findsOneWidget);
+        expect(
+          find.byKey(const PageStorageKey<String>('forecast-priority-Apple')),
+          findsNothing,
+        );
+        expect(
+          tester.getTopLeft(find.text('Calamansi')).dy,
+          lessThan(tester.getTopLeft(find.text('Watermelon')).dy),
+        );
+        await tester.ensureVisible(find.text('Show all 9 fruits'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Show all 9 fruits'));
+        await tester.pumpAndSettle();
+        expect(find.text('#9'), findsOneWidget);
+        expect(find.text('9.10 kg | 2.7% of forecast'), findsOneWidget);
+        await tester.ensureVisible(find.text('Show top 3'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Show top 3'));
+        await tester.pumpAndSettle();
+        expect(find.text('#4'), findsNothing);
+        expect(find.textContaining('Historical Q2 production'), findsNothing);
+        expect(find.text('Price and supply'), findsNothing);
+        expect(find.text('PSA'), findsNothing);
+        expect(find.byType(StackedBarChart), findsNothing);
+        await tester.ensureVisible(find.text('Daily breakdown'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Daily breakdown'));
+        await tester.pumpAndSettle();
+        final StackedBarChart chart = tester.widget<StackedBarChart>(
+          find.byType(StackedBarChart),
+        );
+        final ChartLegend legend = tester.widget<ChartLegend>(
+          find.byType(ChartLegend),
+        );
+        expect(chart.series, hasLength(5));
+        expect(legend.labels.last, 'Other');
+        expect(chart.labels, hasLength(7));
+        expect(chart.labels.first.endsWith('Feb 16'), isTrue);
+        expect(chart.labels.last.endsWith('Feb 22'), isTrue);
+        for (int day = 0; day < 7; day++) {
+          final num total = chart.series.fold<num>(
+            0,
+            (num sum, List<num> values) => sum + values[day],
+          );
+          expect(total, closeTo(45 + 0.9 * day, 0.000000001));
+          expect(chart.series.last[day], closeTo(15 + 0.5 * day, 0.000000001));
+        }
+        final Finder priority = find.byKey(
+          const PageStorageKey<String>('forecast-priority-Calamansi'),
+        );
+        await tester.ensureVisible(priority);
+        await tester.pumpAndSettle();
+        await tester.tap(priority);
+        await tester.pumpAndSettle();
+        expect(find.textContaining('Historical Q2 production'), findsOneWidget);
+
+        await tester.ensureVisible(find.text('Forecast details'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Forecast details'));
+        await tester.pumpAndSettle();
+        expect(find.text('Nine-fruit demand forecast.'), findsOneWidget);
+        expect(find.text('0.24 kg per fruit/day'), findsOneWidget);
+        expect(find.text('Selling days'), findsOneWidget);
+        expect(find.text('Sales period'), findsOneWidget);
+
+        final Finder marketButton = find.widgetWithText(
+          GhostButton,
+          'CDO market outlook',
+        );
+        await tester.ensureVisible(marketButton);
+        await tester.pumpAndSettle();
+        await tester.tap(marketButton);
+        await tester.pumpAndSettle();
+        expect(find.text('Price and supply'), findsOneWidget);
+        expect(find.text('Forecast summary'), findsNothing);
+        expect(find.text('PSA'), findsOneWidget);
+
+        await tester.tap(find.byTooltip('Back'));
+        await tester.pumpAndSettle();
+        expect(find.text('Forecast summary'), findsOneWidget);
+        expect(find.text('Price and supply'), findsNothing);
+        expect(client.calls, 1);
+        expect(tester.takeException(), isNull);
+      },
     );
-    final ChartLegend legend = tester.widget<ChartLegend>(
-      find.byType(ChartLegend),
+  }
+
+  for (final bool choosePastDay in <bool>[false, true]) {
+    testWidgets(
+      'Daily PDF ${choosePastDay ? 'exports selected day' : 'defaults to today'} without mixing history',
+      (WidgetTester tester) async {
+        final AppDatabase database = AppDatabase.inMemory();
+        final DateTime today = DailySalesReportService.businessDay(
+          DateTime.now(),
+        );
+        final DateTime yesterday = today.subtract(const Duration(days: 1));
+        // Noon Manila is 04:00 UTC, independent of the test host timezone.
+        await database.addSale(
+          fruitName: 'Mango',
+          weightGrams: 1250,
+          unitPrice: 6000,
+          totalPrice: 7500,
+          soldAt: DateTime.utc(today.year, today.month, today.day, 4),
+        );
+        await database.addSale(
+          fruitName: 'Banana',
+          weightGrams: 2000,
+          unitPrice: 3500,
+          totalPrice: 7000,
+          soldAt: DateTime.utc(
+            yesterday.year,
+            yesterday.month,
+            yesterday.day,
+            4,
+          ),
+        );
+        final _CaptureReportExportService exporter =
+            _CaptureReportExportService();
+        await tester.pumpWidget(
+          FruityVensApp(database: database, reportExportService: exporter),
+        );
+        await createAccountAndOpenDashboard(tester);
+        await openOperationsMenu(tester);
+        await tester.tap(find.text('Download PDF'));
+        await tester.pumpAndSettle();
+        expect(find.text('Daily sales PDF'), findsOneWidget);
+        expect(find.textContaining('Today - '), findsOneWidget);
+        expect(find.text('PHP 75.00'), findsWidgets);
+        expect(find.text('1 completed sales'), findsOneWidget);
+        expect(exporter.report, isNull);
+
+        if (choosePastDay) {
+          await tester.tap(find.textContaining('Today - '));
+          await tester.pumpAndSettle();
+          final CalendarDatePicker picker = tester.widget(
+            find.byType(CalendarDatePicker),
+          );
+          expect(picker.lastDate, today);
+          picker.onDateChanged(yesterday);
+          await tester.tap(find.text('Use this day'));
+          await tester.pumpAndSettle();
+          expect(find.text('2.000 kg sold'), findsOneWidget);
+        }
+        await tester.tap(find.widgetWithText(PrimaryButton, 'Download PDF'));
+        await tester.pumpAndSettle();
+        final ReportExportData report = exporter.report!;
+        expect(report.reportDate, choosePastDay ? yesterday : today);
+        expect(
+          report.transactions.single.fruit,
+          choosePastDay ? 'Banana' : 'Mango',
+        );
+        expect(
+          report.dailySummary!.revenueCentavos,
+          choosePastDay ? 7000 : 7500,
+        );
+        expect(report.preparedBy, 'student@phinmaed.com');
+        expect(tester.takeException(), isNull);
+
+        await openOperationsMenu(tester);
+        await tester.tap(find.text('Download PDF'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byTooltip('Close report'));
+        await tester.pumpAndSettle();
+        expect(exporter.report, same(report));
+      },
     );
-    expect(chart.series, hasLength(5));
-    expect(legend.labels.last, 'Other');
-    expect(chart.labels, hasLength(7));
-    for (int day = 0; day < 7; day++) {
-      final num total = chart.series.fold<num>(
-        0,
-        (num sum, List<num> values) => sum + values[day],
-      );
-      expect(total, closeTo(45 + 0.9 * day, 0.000000001));
-      expect(chart.series.last[day], closeTo(15 + 0.5 * day, 0.000000001));
-    }
-  });
+  }
 
   testWidgets('Dashboard preserves grouped sale amounts', (
     WidgetTester tester,
@@ -256,6 +446,7 @@ void main() {
         tester.getTopLeft(find.text('CDO market outlook')).dy,
         greaterThan(tester.getTopLeft(find.text('What to do next')).dy),
       );
+      expect(find.text('PSA'), findsNothing);
     },
   );
 
@@ -558,18 +749,18 @@ void main() {
     expect(find.text('Guest'), findsOneWidget);
     await openOperationsMenu(tester);
     expect(find.text('LOCKED'), findsNWidgets(2));
-    expect(find.text('Download Data'), findsOneWidget);
+    expect(find.text('Download PDF'), findsOneWidget);
 
     await tester.tap(find.text('Generate forecast'));
     await tester.pumpAndSettle();
 
     expect(find.text('Forecasting'), findsOneWidget);
     expect(find.text('CDO market outlook'), findsOneWidget);
-    expect(find.text('PSA'), findsOneWidget);
+    expect(find.text('PSA'), findsNothing);
     expect(find.text('Demo forecast'), findsOneWidget);
-    expect(find.text('Demo forecast preview only.'), findsOneWidget);
+    expect(find.text('Demo'), findsOneWidget);
     expect(find.text('What to do next'), findsOneWidget);
-    expect(find.text('Projected daily sales'), findsOneWidget);
+    expect(find.text('Daily breakdown'), findsOneWidget);
   });
 
   testWidgets('Guest demo rankings do not leak into real accounts', (
@@ -640,13 +831,21 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Forecasting'), findsOneWidget);
     expect(find.text('CDO market outlook'), findsOneWidget);
-    expect(find.text('Vendor demand forecast'), findsOneWidget);
+    expect(find.text('Forecast summary'), findsOneWidget);
     expect(find.text('Collecting'), findsOneWidget);
     expect(
       find.textContaining('0 of 30 selling days recorded'),
       findsOneWidget,
     );
     expect(find.text('Collecting sales history'), findsOneWidget);
+    expect(
+      find.text('Daily projections unlock after 30 selling days.'),
+      findsNothing,
+    );
+    await tester.ensureVisible(find.text('Daily breakdown'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Daily breakdown'));
+    await tester.pumpAndSettle();
     expect(
       find.text('Daily projections unlock after 30 selling days.'),
       findsWidgets,
@@ -682,7 +881,7 @@ void main() {
     await tester.tap(find.byTooltip('Back'));
     await tester.pumpAndSettle();
     await openOperationsMenu(tester);
-    expect(find.text('Download Data'), findsOneWidget);
+    expect(find.text('Download PDF'), findsOneWidget);
     expect(find.text('History'), findsOneWidget);
   });
 

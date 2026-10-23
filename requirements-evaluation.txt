@@ -1,0 +1,7 @@
+# Local research figures; the mobile app and hosted server do not need Matplotlib.
+fastapi>=0.115.0
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.4.0
+xgboost-cpu>=2.1.0,<4
+matplotlib>=3.9.0

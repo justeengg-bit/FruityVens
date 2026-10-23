@@ -12,7 +12,7 @@ class ReportExportService {
   );
 
   Future<ReportExportResult> export(ReportExportData data) async {
-    final Uint8List bytes = await _buildPdf(data);
+    final Uint8List bytes = await buildPdf(data);
     final String fileName = data.fileName;
 
     if (Platform.isAndroid) {
@@ -32,7 +32,7 @@ class ReportExportService {
     return ReportExportResult(fileName: fileName, path: file.path);
   }
 
-  Future<Uint8List> _buildPdf(ReportExportData data) async {
+  Future<Uint8List> buildPdf(ReportExportData data) async {
     final pw.Document document = pw.Document();
     final PdfColor green = PdfColor.fromHex('#2E7D32');
     final PdfColor darkGreen = PdfColor.fromHex('#14351A');
@@ -56,6 +56,13 @@ class ReportExportService {
                 'Includes generated sales for testing - see record labels',
                 style: const pw.TextStyle(fontSize: 9),
               ),
+        footer: (pw.Context context) => pw.Align(
+          alignment: pw.Alignment.centerRight,
+          child: pw.Text(
+            'Page ${context.pageNumber} of ${context.pagesCount}',
+            style: pw.TextStyle(color: muted, fontSize: 9),
+          ),
+        ),
         pageTheme: pw.PageTheme(
           margin: const pw.EdgeInsets.all(28),
           theme: pw.ThemeData.withFont(
@@ -64,6 +71,66 @@ class ReportExportService {
           ),
         ),
         build: (pw.Context context) {
+          if (data.reportDate != null) {
+            return <pw.Widget>[
+              _header(data, green, muted),
+              pw.SizedBox(height: 16),
+              _metricWrap(data.dashboardMetrics, green, orange, width: 170),
+              _sectionTitle('Sales by fruit', green),
+              _tableOrEmpty(
+                headers: const <String>[
+                  'Fruit',
+                  'Sales',
+                  'Kg sold',
+                  'Revenue',
+                  'Avg PHP/kg',
+                ],
+                emptyMessage: 'No completed sales on this date.',
+                rows: data.fruitSales
+                    .map(
+                      (ReportFruitSalesSummary fruit) => <String>[
+                        fruit.name,
+                        '${fruit.count}',
+                        (fruit.weightGrams / 1000).toStringAsFixed(3),
+                        reportMoney(fruit.revenueCentavos),
+                        fruit.weightGrams == 0
+                            ? '-'
+                            : (fruit.revenueCentavos * 10 / fruit.weightGrams)
+                                  .toStringAsFixed(2),
+                      ],
+                    )
+                    .toList(),
+              ),
+              _sectionTitle('Transaction details', green),
+              _bodyText(
+                'Times use Asia/Manila (UTC+08:00). Revenue totals include completed sales only. Cancelled sales are listed for reference; removed and pending records are excluded.',
+              ),
+              pw.SizedBox(height: 8),
+              _tableOrEmpty(
+                headers: const <String>[
+                  'Time',
+                  'Fruit',
+                  'Weight',
+                  'Unit price',
+                  'Total',
+                  'Status',
+                ],
+                emptyMessage: 'No recorded sales for this date.',
+                rows: data.transactions
+                    .map(
+                      (ReportTransaction sale) => <String>[
+                        sale.time,
+                        sale.fruit,
+                        sale.weight,
+                        sale.unitPrice ?? '-',
+                        sale.price,
+                        sale.status,
+                      ],
+                    )
+                    .toList(),
+              ),
+            ];
+          }
           return <pw.Widget>[
             _header(data, green, muted),
             pw.SizedBox(height: 16),
@@ -181,7 +248,9 @@ class ReportExportService {
               crossAxisAlignment: pw.CrossAxisAlignment.start,
               children: <pw.Widget>[
                 pw.Text(
-                  'FruityVens Report',
+                  data.reportDate == null
+                      ? 'FruityVens Report'
+                      : 'FruityVens Daily Sales',
                   style: pw.TextStyle(
                     fontSize: 22,
                     fontWeight: pw.FontWeight.bold,
@@ -205,15 +274,34 @@ class ReportExportService {
                   ),
                 ],
                 pw.SizedBox(height: 4),
+                if (data.reportDate != null) ...<pw.Widget>[
+                  pw.Text(
+                    'Sales date: ${data.displayReportDate}',
+                    style: pw.TextStyle(
+                      fontSize: 13,
+                      fontWeight: pw.FontWeight.bold,
+                    ),
+                  ),
+                  if (data.preparedBy?.isNotEmpty ?? false)
+                    pw.Text(
+                      'Prepared by: ${data.preparedBy}',
+                      style: const pw.TextStyle(fontSize: 10),
+                    ),
+                  pw.SizedBox(height: 4),
+                ],
                 pw.Text(
-                  'Generated ${data.displayDate}',
+                  data.reportDate == null
+                      ? 'Generated ${data.displayDate}'
+                      : 'Generated ${data.displayGeneratedAt} - Asia/Manila',
                   style: pw.TextStyle(color: muted, fontSize: 10),
                 ),
-                pw.SizedBox(height: 6),
-                pw.Text(
-                  'Fruit sales, pricing, forecasting, and analytics.',
-                  style: const pw.TextStyle(fontSize: 11),
-                ),
+                if (data.reportDate == null) ...<pw.Widget>[
+                  pw.SizedBox(height: 6),
+                  pw.Text(
+                    'Fruit sales, pricing, forecasting, and analytics.',
+                    style: const pw.TextStyle(fontSize: 11),
+                  ),
+                ],
               ],
             ),
           ),
@@ -246,14 +334,15 @@ class ReportExportService {
   pw.Widget _metricWrap(
     List<ReportMetric> metrics,
     PdfColor green,
-    PdfColor orange,
-  ) {
+    PdfColor orange, {
+    double width = 122,
+  }) {
     return pw.Wrap(
       spacing: 8,
       runSpacing: 8,
       children: metrics.map((ReportMetric metric) {
         return pw.Container(
-          width: 122,
+          width: width,
           padding: const pw.EdgeInsets.all(9),
           decoration: pw.BoxDecoration(
             border: pw.Border.all(color: green, width: 0.5),
@@ -426,9 +515,17 @@ class ReportExportData {
     required this.transactions,
     this.datasetLabel,
     this.salesCounts = const <ReportFruitSalesCount>[],
+    this.reportDate,
+    this.preparedBy,
+    this.dailySummary,
+    this.fruitSales = const <ReportFruitSalesSummary>[],
   });
 
   final DateTime generatedAt;
+  final DateTime? reportDate;
+  final String? preparedBy;
+  final ReportDailySummary? dailySummary;
+  final List<ReportFruitSalesSummary> fruitSales;
   final String? datasetLabel;
   final List<ReportFruitSalesCount> salesCounts;
   final List<ReportMetric> dashboardMetrics;
@@ -445,7 +542,20 @@ class ReportExportData {
     return '$day/$month/${generatedAt.year}';
   }
 
+  String get displayReportDate {
+    final DateTime date = reportDate ?? generatedAt;
+    return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
+  }
+
+  String get displayGeneratedAt {
+    final DateTime clock = generatedAt.toUtc().add(const Duration(hours: 8));
+    return '${clock.day.toString().padLeft(2, '0')}/${clock.month.toString().padLeft(2, '0')}/${clock.year} ${clock.hour.toString().padLeft(2, '0')}:${clock.minute.toString().padLeft(2, '0')}';
+  }
+
   String get fileName {
+    if (reportDate case final DateTime date) {
+      return 'FruityVens_sales_${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}.pdf';
+    }
     final String day = generatedAt.day.toString().padLeft(2, '0');
     final String month = generatedAt.month.toString().padLeft(2, '0');
     final String prefix = datasetLabel == null
@@ -453,6 +563,42 @@ class ReportExportData {
         : 'FruityVens_SAMPLE_report';
     return '${prefix}_$day-$month-${generatedAt.year}.pdf';
   }
+}
+
+String reportMoney(int centavos) {
+  final String amount = (centavos / 100).toStringAsFixed(2);
+  final List<String> parts = amount.split('.');
+  final String whole = parts.first.replaceAllMapped(
+    RegExp(r'\B(?=(\d{3})+(?!\d))'),
+    (Match match) => ',',
+  );
+  return 'PHP $whole.${parts.last}';
+}
+
+class ReportDailySummary {
+  const ReportDailySummary({
+    required this.completedSales,
+    required this.cancelledSales,
+    required this.revenueCentavos,
+    required this.weightGrams,
+  });
+  final int completedSales;
+  final int cancelledSales;
+  final int revenueCentavos;
+  final int weightGrams;
+}
+
+class ReportFruitSalesSummary {
+  const ReportFruitSalesSummary({
+    required this.name,
+    required this.count,
+    required this.weightGrams,
+    required this.revenueCentavos,
+  });
+  final String name;
+  final int count;
+  final int weightGrams;
+  final int revenueCentavos;
 }
 
 class ReportFruitSalesCount {
@@ -531,6 +677,7 @@ class ReportTransaction {
     required this.date,
     required this.time,
     required this.status,
+    this.unitPrice,
   });
 
   final String fruit;
@@ -539,4 +686,5 @@ class ReportTransaction {
   final String date;
   final String time;
   final String status;
+  final String? unitPrice;
 }

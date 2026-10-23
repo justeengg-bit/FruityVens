@@ -19,6 +19,7 @@ import 'data/app_database.dart';
 import 'firebase_options.dart';
 import 'services/ai_automation_client.dart';
 import 'services/camera_eye_service.dart';
+import 'services/daily_sales_report_service.dart';
 import 'services/firebase_sync_service.dart';
 import 'services/market_outlook_service.dart';
 import 'services/report_export_service.dart';
@@ -131,10 +132,16 @@ class MyApp extends FruityVensApp {
 }
 
 class FruityVensApp extends StatelessWidget {
-  const FruityVensApp({super.key, this.database, this.aiAutomationClient});
+  const FruityVensApp({
+    super.key,
+    this.database,
+    this.aiAutomationClient,
+    this.reportExportService,
+  });
 
   final AppDatabase? database;
   final AiAutomationClient? aiAutomationClient;
+  final ReportExportService? reportExportService;
 
   @override
   Widget build(BuildContext context) {
@@ -163,6 +170,7 @@ class FruityVensApp extends StatelessWidget {
       child: FruityVensHome(
         database: database,
         aiAutomationClient: aiAutomationClient,
+        reportExportService: reportExportService,
       ),
     );
   }
@@ -177,6 +185,7 @@ enum AppScreen {
   inventory,
   inventoryManage,
   forecast,
+  marketOutlook,
   analytics,
   transactions,
 }
@@ -193,10 +202,16 @@ class _PhoneLinkSetup {
 }
 
 class FruityVensHome extends StatefulWidget {
-  const FruityVensHome({super.key, this.database, this.aiAutomationClient});
+  const FruityVensHome({
+    super.key,
+    this.database,
+    this.aiAutomationClient,
+    this.reportExportService,
+  });
 
   final AppDatabase? database;
   final AiAutomationClient? aiAutomationClient;
+  final ReportExportService? reportExportService;
 
   @override
   State<FruityVensHome> createState() => _FruityVensHomeState();
@@ -238,7 +253,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   final FirebaseSyncService _firebaseSyncService = const FirebaseSyncService();
   final MarketOutlookService _marketOutlookService =
       const MarketOutlookService();
-  final ReportExportService _reportExportService = const ReportExportService();
+  late final ReportExportService _reportExportService;
   final ScaleLogService _scaleLogService = const ScaleLogService();
   final LocalAuthentication _localAuth = LocalAuthentication();
   Future<void>? _googleSignInInitialization;
@@ -265,6 +280,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   AppScreen _screen = AppScreen.login;
   AnalyticsPeriod _period = AnalyticsPeriod.sevenDays;
   bool _showAnalyticsDetails = false;
+  bool _showAllForecastFruits = false;
   bool _operationsOpen = false;
   bool _rememberMe = true;
   bool _passwordVisible = false;
@@ -485,6 +501,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       case AppScreen.login:
       case AppScreen.createAccount:
       case AppScreen.forgotPassword:
+      case AppScreen.marketOutlook:
         return false;
     }
   }
@@ -654,6 +671,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   void initState() {
     super.initState();
     _database = widget.database ?? AppDatabase();
+    _reportExportService =
+        widget.reportExportService ?? const ReportExportService();
     _ownsDatabase = widget.database == null;
     _aiAutomationClient =
         widget.aiAutomationClient ?? const AiAutomationClient();
@@ -2409,6 +2428,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     fruityVensMessengerKey.currentState?.hideCurrentSnackBar();
     if (_isWorkerSession &&
         (screen == AppScreen.forecast ||
+            screen == AppScreen.marketOutlook ||
             screen == AppScreen.analytics ||
             screen == AppScreen.inventoryManage)) {
       _toast('Owner access required.');
@@ -2421,7 +2441,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _operationsOpen = false;
       _lastBackGestureAt = null;
     });
-    if (screen == AppScreen.forecast) {
+    if (screen == AppScreen.marketOutlook) {
       unawaited(_loadMarketOutlook());
     }
   }
@@ -2500,6 +2520,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           _screen = AppScreen.dashboard;
           _lastBackGestureAt = null;
         });
+        return;
+      case AppScreen.marketOutlook:
+        _show(AppScreen.forecast);
         return;
       case AppScreen.dashboard:
       case AppScreen.login:
@@ -4438,7 +4461,11 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       });
     }
     if (_isGuestSession) {
-      _showFullAccessRequired('Download Data');
+      _showFullAccessRequired('Download PDF');
+      return;
+    }
+    if (_isWorkerSession) {
+      _toast('Owner access required.');
       return;
     }
     if (_exportingReport) {
@@ -4449,8 +4476,30 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       _exportingReport = true;
     });
     try {
+      final List<LocalSale> sales = await _database.getSalesTransactions();
+      if (!mounted) {
+        return;
+      }
+      final ReportExportData? report =
+          await showModalBottomSheet<ReportExportData>(
+            context: context,
+            isScrollControlled: true,
+            backgroundColor: AppColors.bgCard,
+            shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
+            ),
+            builder: (BuildContext context) =>
+                _DailyReportSheet(sales: sales, preparedBy: _sessionEmail),
+          );
+      if (!mounted) {
+        return;
+      }
+      if (report == null) {
+        setState(() => _exportingReport = false);
+        return;
+      }
       final ReportExportResult result = await _reportExportService.export(
-        _buildReportData(),
+        report,
       );
       if (!mounted) {
         return;
@@ -4472,127 +4521,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
       });
       _toast('Report export failed: $error');
     }
-  }
-
-  ReportExportData _buildReportData() {
-    final DateTime now = DateTime.now();
-    final DashboardStats stats = _dashboardStats();
-    final AnalyticsData analytics = _generateAnalytics(
-      _selectedYear,
-      _selectedMonth,
-      _period,
-    );
-    final String forecastSummary =
-        _latestAiForecast?.summary ??
-        (stats.topFruitRanks.isEmpty
-            ? 'No forecast generated yet.'
-            : '${stats.topFruitRanks.first.name} currently leads sales.');
-
-    return ReportExportData(
-      generatedAt: now,
-      datasetLabel: _hasGeneratedSales
-          ? 'Includes generated CDO sales (Jul 1-Oct 9, 2026)'
-          : null,
-      dashboardMetrics: <ReportMetric>[
-        ReportMetric(
-          'Today sales',
-          money(stats.salesTotal),
-          '${stats.transactionCount} transactions',
-          highlight: true,
-        ),
-        ReportMetric('Avg weight', stats.averageWeightLabel, 'Per transaction'),
-        ReportMetric('Top fruit', stats.topFruit, 'Fastest seller'),
-        ReportMetric('Camera', _cameraEyeStateLabel, 'Fruit scanning'),
-      ],
-      inventory: _managedFruits.map((String fruit) {
-        final _RestockSignal signal = _restockSignalForFruit(
-          fruit,
-          stats: stats,
-        );
-        return ReportFruit(
-          name: fruit,
-          pricePerKg: _inventoryPriceIsConfigured(fruit)
-              ? _priceWithPricingUnit(
-                  _prices[fruit] ?? 0,
-                  _pricingUnitFor(fruit),
-                )
-              : 'Unset',
-          restockBasis: 'Sales-based',
-          status: signal.label,
-        );
-      }).toList(),
-      forecastSummary: forecastSummary,
-      forecastRows: _reportForecastRows(stats),
-      analytics: ReportAnalytics(
-        chartTitle: analytics.chartTitle,
-        labels: analytics.revenueLabels,
-        series: analytics.revenueSeries,
-        shareLabels: analytics.shareLabels,
-        shareValues: analytics.shareValues.map(money).toList(),
-      ),
-      analyticsMetrics: <ReportMetric>[
-        ReportMetric(
-          'Revenue',
-          analytics.revenue,
-          analytics.periodLabel,
-          highlight: true,
-        ),
-        ReportMetric('Weight sold', analytics.unitsSold, 'Across all fruits'),
-        ReportMetric(
-          'Best seller',
-          analytics.bestSeller,
-          analytics.bestSellerRevenue,
-        ),
-        ReportMetric(
-          'Average revenue',
-          analytics.averageRevenue,
-          analytics.averageLabel,
-        ),
-      ],
-      salesCounts: analytics.movements
-          .map(
-            (movement) => ReportFruitSalesCount(
-              name: movement.name,
-              count: movement.salesCount,
-            ),
-          )
-          .toList(),
-      transactions: _visibleTransactionHistory.map((
-        TransactionData transaction,
-      ) {
-        return ReportTransaction(
-          fruit: transaction.fruit,
-          weight: transaction.weight,
-          price: transaction.price,
-          date: transaction.date,
-          time: transaction.time,
-          status: transaction.status,
-        );
-      }).toList(),
-    );
-  }
-
-  List<ReportForecastRow> _reportForecastRows(DashboardStats stats) {
-    if (stats.topFruitRanks.isEmpty) {
-      return const <ReportForecastRow>[
-        ReportForecastRow(
-          name: 'No sales yet',
-          value: 'Waiting for transactions',
-          action: 'No action yet',
-        ),
-      ];
-    }
-    return stats.topFruitRanks.map((FruitRank rank) {
-      final _RestockSignal signal = _restockSignalForFruit(
-        rank.name,
-        stats: stats,
-      );
-      return ReportForecastRow(
-        name: rank.name,
-        value: '${rank.weightLabel} sold today',
-        action: signal.label,
-      );
-    }).toList();
   }
 
   Future<void> _loadMarketOutlook() async {
@@ -4946,38 +4874,15 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           return _ForecastRecommendation(
             fruitName: prediction.fruit,
             title: '$recommendation ${prediction.fruit}',
-            detail: simpleDetail,
+            detail: prediction.reason.trim().isEmpty
+                ? simpleDetail
+                : '$simpleDetail ${prediction.reason.trim()}',
             value: recommendation,
             note: 'Forecast action',
             badge: _forecastPredictionBadge(recommendation),
           );
         })
         .toList();
-  }
-
-  String? _forecastCoverageLabel(AiAutomationResult forecast) {
-    final AiForecastCoverage? coverage = forecast.coverage;
-    if (coverage == null || !coverage.hasTransactions) {
-      return null;
-    }
-
-    final String transactionLabel = coverage.transactionCount == 1
-        ? '1 sold transaction'
-        : '${formatNumber(coverage.transactionCount)} sold transactions';
-    final String dayLabel = coverage.observedDays == 1
-        ? '1 sales day'
-        : '${formatNumber(coverage.observedDays)} sales days';
-    final DateTime? start = coverage.dataStart;
-    final DateTime? end = coverage.dataEnd;
-    final String dateLabel = start == null || end == null
-        ? ''
-        : _isSameDay(start, end)
-        ? ' on ${_formatDate(start)}'
-        : ' from ${_formatDateShort(start)} to ${_formatDateShort(end)}';
-    final String fruitLabel = coverage.fruits.isEmpty
-        ? ''
-        : ' across ${formatNumber(coverage.fruits.length)} fruits';
-    return 'Analyzed $transactionLabel over $dayLabel$dateLabel$fruitLabel.';
   }
 
   String _simpleForecastDetail(String recommendation, String fruit) {
@@ -5012,7 +4917,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     final String cleanError = error.toLowerCase();
     developer.log('Forecast unavailable: $error', name: 'FruityVensAI');
     if (cleanError.contains('forecast server unavailable')) {
-      return 'Demand forecast service is unreachable. Reconnect your phone to the computer running the service, then try again.';
+      return 'The online forecast service could not be reached. Check your internet connection and try again. The service may take a little longer to start after being idle.';
     }
     if (cleanError.contains('firebasevertexai.googleapis.com') ||
         cleanError.contains('service api') ||
@@ -5048,7 +4953,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         cleanError.contains('connection') ||
         cleanError.contains('network') ||
         cleanError.contains('internet')) {
-      return 'FruityVens could not reach Firebase AI. If your internet is already on, check Firebase AI Logic or App Check setup, then try Generate again.';
+      return 'FruityVens could not reach the online forecast service. Check your internet connection and try again.';
     }
     return 'Forecasting is unavailable right now. Check Firebase AI setup or your connection, then try again.';
   }
@@ -5119,6 +5024,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         : const EdgeInsets.fromLTRB(16, 14, 16, 32);
 
     final Widget scrollableContent = SingleChildScrollView(
+      key: _screen == AppScreen.forecast || _screen == AppScreen.marketOutlook
+          ? PageStorageKey<AppScreen>(_screen)
+          : null,
       physics: const AlwaysScrollableScrollPhysics(),
       padding: contentPadding,
       child: _hasGeneratedSales && _screen == AppScreen.transactions
@@ -5172,6 +5080,11 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         return _inventoryManageNav();
       case AppScreen.forecast:
         return _forecastNav();
+      case AppScreen.marketOutlook:
+        return _centeredScreenNav(
+          title: 'CDO market outlook',
+          onBack: () => _show(AppScreen.forecast),
+        );
       case AppScreen.analytics:
         return _analyticsNav();
       case AppScreen.transactions:
@@ -5294,6 +5207,8 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         return _inventoryManageScreen();
       case AppScreen.forecast:
         return _forecastScreen();
+      case AppScreen.marketOutlook:
+        return _marketOutlookScreen();
       case AppScreen.analytics:
         return _analyticsScreen();
       case AppScreen.transactions:
@@ -6484,10 +6399,10 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             if (!_isWorkerSession)
               _operationMenuAction(
                 icon: Icons.download_rounded,
-                title: _exportingReport ? 'Preparing report' : 'Download Data',
+                title: _exportingReport ? 'Preparing report' : 'Download PDF',
                 description: _isGuestSession
                     ? 'Create an account to unlock'
-                    : 'PDF report with all app data',
+                    : 'Daily sales report',
                 locked: _isGuestSession,
                 onTap: _downloadData,
               ),
@@ -9328,21 +9243,21 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     );
   }
 
-  Widget _marketOutlookCard({bool embedded = false}) {
+  Widget _marketOutlookScreen() {
     final MarketOutlookDataset? dataset = _marketOutlookDataset;
     final List<FruitMarketOutlook> visibleOutlooks = _visibleMarketOutlooks;
     final int totalOutlooks = _orderedMarketOutlooks.length;
-    final Widget content = Column(
+    return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         Row(
           children: <Widget>[
-            const Expanded(child: _ForecastSectionTitle('CDO market outlook')),
+            const Expanded(child: _ForecastSectionTitle('Price and supply')),
             StatusBadge.blue('PSA'),
           ],
         ),
         Text(
-          'PSA history: prices through Dec 2025 - production through Q4 2025',
+          'Retail prices through Dec 2025\nProduction through Q4 2025',
           style: TextStyle(
             color: AppColors.textSecondary,
             fontSize: 13,
@@ -9409,9 +9324,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
         ],
       ],
     );
-    return embedded
-        ? content
-        : AppCard(padding: const EdgeInsets.all(14), child: content);
   }
 
   String? _marketPriceText(MarketSignal? signal) {
@@ -9471,203 +9383,420 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     final List<_ForecastRecommendation> recommendations =
         _forecastRecommendations(stats);
     final _ForecastChartData forecastChart = _forecastChartData();
+    final List<AiForecastPrediction> predictions =
+        List<AiForecastPrediction>.of(
+          _latestAiForecast?.predictions ?? const <AiForecastPrediction>[],
+        )..sort((AiForecastPrediction a, AiForecastPrediction b) {
+          final int volume = b.predictedKgTotal.compareTo(a.predictedKgTotal);
+          return volume != 0 ? volume : a.fruit.compareTo(b.fruit);
+        });
+    final double predictedTotal = predictions.fold<double>(
+      0,
+      (double sum, AiForecastPrediction fruit) => sum + fruit.predictedKgTotal,
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        AppCard(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: _ForecastSectionTitle(
-                      _isGuestSession
-                          ? 'Demo forecast'
-                          : 'Vendor demand forecast',
-                    ),
-                  ),
-                  _isGuestSession
-                      ? StatusBadge.blue('Demo')
-                      : !_vendorForecastReady
-                      ? StatusBadge.blue('Collecting')
-                      : _latestAiError == null
-                      ? StatusBadge.green('Ready')
-                      : StatusBadge.orange('Check AI'),
-                ],
+        _forecastOverview(forecastChart, predictions),
+        if (predictions.isNotEmpty) ...<Widget>[
+          SizedBox(height: 24),
+          const _ForecastSectionTitle('Fruit ranking'),
+          Text(
+            'By projected sales volume',
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+          ),
+          SizedBox(height: 8),
+          for (
+            int index = 0;
+            index <
+                (_showAllForecastFruits
+                    ? predictions.length
+                    : math.min(3, predictions.length));
+            index++
+          )
+            _forecastPriorityTile(
+              predictions[index],
+              index + 1,
+              predictedTotal,
+            ),
+          if (predictions.length > 3)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => setState(
+                  () => _showAllForecastFruits = !_showAllForecastFruits,
+                ),
+                icon: Icon(
+                  _showAllForecastFruits
+                      ? Icons.expand_less_rounded
+                      : Icons.expand_more_rounded,
+                ),
+                label: Text(
+                  _showAllForecastFruits
+                      ? 'Show top 3'
+                      : 'Show all ${predictions.length} fruits',
+                ),
               ),
-              if (_forecastGenerating)
-                Row(
-                  children: <Widget>[
-                    SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: AppColors.orangeText,
-                      ),
-                    ),
-                    SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        _isGuestSession
-                            ? 'Building a local demo forecast from sample sales...'
-                            : 'Updating forecast...',
-                        style: TextStyle(
-                          color: AppColors.textSecondary,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ),
-                  ],
-                )
-              else
-                Text(
-                  _latestAiError ??
-                      _latestAiForecast?.summary ??
-                      (_isGuestSession
-                          ? 'Demo forecast preview only.'
-                          : !_vendorForecastReady
-                          ? 'Collecting sales history: $_observedVendorSalesDays of $_minimumVendorForecastDays selling days recorded.'
-                          : 'Ready to forecast from current sales data.'),
+            ),
+        ] else ...<Widget>[
+          SizedBox(height: 24),
+          const _ForecastSectionTitle('What to do next'),
+          if (recommendations.isEmpty)
+            _ForecastEmptyState(message: _vendorActionEmptyMessage())
+          else
+            ...recommendations.map(
+              (_ForecastRecommendation item) => GuidedActionRow(
+                fruitName: item.fruitName,
+                title: item.title,
+                detail: item.detail,
+                badge: item.badge,
+              ),
+            ),
+        ],
+        SizedBox(height: 16),
+        Divider(color: AppColors.borderSoft),
+        ExpansionTile(
+          key: const PageStorageKey<String>('forecast-daily-breakdown'),
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: const EdgeInsets.only(bottom: 16),
+          shape: const Border(),
+          collapsedShape: const Border(),
+          title: Text(
+            'Daily breakdown',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          children: <Widget>[
+            if (forecastChart.hasSales) ...<Widget>[
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  forecastChart.periodLabel,
                   style: TextStyle(
-                    color: _latestAiError == null
-                        ? AppColors.textSecondary
-                        : AppColors.pinkText,
-                    fontSize: 14,
-                    height: 1.45,
+                    color: AppColors.textSecondary,
+                    fontSize: 13,
                   ),
                 ),
-              if (_latestAiForecast != null) ...<Widget>[
-                SizedBox(height: 8),
-                Text(
-                  'Source: ${_latestAiForecast!.sourceLabel}',
-                  style: TextStyle(color: AppColors.textMuted, fontSize: 12),
-                ),
-                if (_forecastCoverageLabel(_latestAiForecast!)
-                    case final String coverageLabel) ...<Widget>[
-                  SizedBox(height: 4),
-                  Text(
-                    coverageLabel,
-                    style: TextStyle(
-                      color: AppColors.textMuted,
-                      fontSize: 12,
-                      height: 1.3,
-                    ),
-                  ),
-                ],
-              ],
-              SizedBox(height: 12),
-              PrimaryButton(
-                label: !_vendorForecastReady
-                    ? 'Collecting sales history'
-                    : _forecastGenerating
-                    ? 'Generating forecast'
-                    : 'Generate forecast',
-                icon: Icons.auto_graph_rounded,
-                onPressed: _forecastGenerating || !_vendorForecastReady
-                    ? null
-                    : () => _generateAiForecast(),
-                busy: _forecastGenerating,
-                expanded: true,
               ),
-            ],
-          ),
+              SizedBox(height: 12),
+              ChartLegend(
+                labels: forecastChart.fruitLabels,
+                colors: AppColors.chartColors,
+                fontSize: 12,
+              ),
+              SizedBox(height: 12),
+              StackedBarChart(
+                labels: forecastChart.labels,
+                series: forecastChart.series,
+                colors: AppColors.chartColors,
+                valueSuffix: ' kg',
+                showValueLabels: true,
+                height: 240,
+                labelFontSize: 11,
+                valueLabelFontSize: 11,
+              ),
+            ] else
+              _ForecastChartEmptyState(message: _forecastChartEmptyMessage()),
+          ],
         ),
-        SizedBox(height: 12),
-        AppCard(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              const _ForecastSectionTitle('Projected daily sales'),
-              Text(
-                forecastChart.hasSales
-                    ? (_isGuestSession
-                          ? 'Demo projection for ${forecastChart.periodLabel}, from sample sales only.'
-                          : 'Model projection for ${forecastChart.periodLabel}, based on sales history.')
-                    : _forecastChartEmptyMessage(),
-                style: TextStyle(
-                  color: AppColors.textSecondary,
-                  fontSize: 14,
-                  height: 1.35,
-                ),
-              ),
-              SizedBox(height: 10),
-              if (forecastChart.hasSales) ...<Widget>[
-                ChartLegend(
-                  labels: forecastChart.fruitLabels,
-                  colors: AppColors.chartColors,
-                  fontSize: 14,
-                ),
-                SizedBox(height: 10),
-                StackedBarChart(
-                  labels: forecastChart.labels,
-                  series: forecastChart.series,
-                  colors: AppColors.chartColors,
-                  valueSuffix: ' kg',
-                  showValueLabels: true,
-                  height: 260,
-                  labelFontSize: 12,
-                  valueLabelFontSize: 11,
-                ),
-              ] else
-                _ForecastChartEmptyState(message: _forecastChartEmptyMessage()),
-              SizedBox(height: 12),
-              MetricGrid(
-                maxColumns: 3,
-                labelFontSize: 13,
-                valueFontSize: 23,
-                subtextFontSize: 12,
-                metrics: <MetricData>[
-                  MetricData(
-                    'Forecast period',
-                    forecastChart.periodShortLabel,
-                    forecastChart.periodDateLabel,
-                  ),
-                  MetricData(
-                    'Analyzed',
-                    forecastChart.analyzedLabel,
-                    forecastChart.analyzedSubtext,
-                  ),
-                  MetricData(
-                    'Last updated',
-                    forecastChart.lastUpdatedLabel,
-                    forecastChart.lastUpdatedSubtext,
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-        SizedBox(height: 12),
-        AppCard(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              const _ForecastSectionTitle('What to do next'),
-              if (recommendations.isEmpty)
-                _ForecastEmptyState(message: _vendorActionEmptyMessage())
-              else
-                ...recommendations.map((_ForecastRecommendation item) {
-                  return GuidedActionRow(
-                    fruitName: item.fruitName,
-                    title: item.title,
-                    detail: item.detail,
-                    badge: item.badge,
-                  );
-                }),
-              SizedBox(height: 12),
-              Divider(color: AppColors.borderSoft),
-              SizedBox(height: 12),
-              _marketOutlookCard(embedded: true),
-            ],
+        if (_latestAiForecast
+            case final AiAutomationResult forecast) ...<Widget>[
+          SizedBox(height: 16),
+          _forecastModelDetails(forecast, forecastChart),
+        ],
+        SizedBox(height: 24),
+        SizedBox(
+          width: double.infinity,
+          child: GhostButton(
+            label: 'CDO market outlook',
+            icon: Icons.storefront_rounded,
+            onPressed: () => _show(AppScreen.marketOutlook),
           ),
         ),
       ],
+    );
+  }
+
+  Widget _forecastOverview(
+    _ForecastChartData chart,
+    List<AiForecastPrediction> predictions,
+  ) {
+    final double total = chart.series
+        .expand((List<num> series) => series)
+        .fold<double>(0, (double sum, num value) => sum + value);
+    final String confidence =
+        predictions.any(
+          (AiForecastPrediction prediction) =>
+              prediction.confidence.toLowerCase() == 'low',
+        )
+        ? 'low'
+        : predictions.every(
+            (AiForecastPrediction prediction) =>
+                prediction.confidence.toLowerCase() == 'high',
+          )
+        ? 'high'
+        : 'medium';
+    final Widget badge = _isGuestSession
+        ? StatusBadge.blue('Demo')
+        : _latestAiError != null
+        ? StatusBadge.orange('Unavailable')
+        : !_vendorForecastReady
+        ? StatusBadge.blue('Collecting')
+        : predictions.isEmpty
+        ? StatusBadge.green('Ready')
+        : confidence == 'low'
+        ? StatusBadge.orange('Low confidence')
+        : confidence == 'high'
+        ? StatusBadge.green('High confidence')
+        : StatusBadge.blue('Medium confidence');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Expanded(
+              child: _ForecastSectionTitle(
+                _isGuestSession ? 'Demo forecast' : 'Forecast summary',
+              ),
+            ),
+            SizedBox(width: 8),
+            badge,
+          ],
+        ),
+        if (chart.hasSales || predictions.isNotEmpty) ...<Widget>[
+          Text(
+            chart.periodDateLabel,
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+          ),
+          SizedBox(height: 8),
+          Text(
+            '${total.toStringAsFixed(2)} kg projected${predictions.isEmpty ? '' : ' across ${predictions.length} fruits'}',
+            style: TextStyle(
+              color: AppColors.textPrimary,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+        if (_forecastGenerating ||
+            _latestAiError != null ||
+            !chart.hasSales) ...<Widget>[
+          SizedBox(height: 8),
+          Text(
+            _forecastGenerating
+                ? 'Updating forecast...'
+                : _latestAiError ??
+                      (_isGuestSession
+                          ? 'Demo forecast preview only.'
+                          : _latestAiForecast?.summary ??
+                                (!_vendorForecastReady
+                                    ? 'Collecting sales history: $_observedVendorSalesDays of $_minimumVendorForecastDays selling days recorded.'
+                                    : 'Ready to forecast from current sales data.')),
+            style: TextStyle(
+              color: _latestAiError == null
+                  ? AppColors.textSecondary
+                  : AppColors.pinkText,
+              fontSize: 14,
+              height: 1.4,
+            ),
+          ),
+        ],
+        SizedBox(height: 18),
+        PrimaryButton(
+          label: !_vendorForecastReady
+              ? 'Collecting sales history'
+              : _forecastGenerating
+              ? 'Generating forecast'
+              : 'Generate forecast',
+          icon: Icons.auto_graph_rounded,
+          onPressed: _forecastGenerating || !_vendorForecastReady
+              ? null
+              : () => _generateAiForecast(),
+          busy: _forecastGenerating,
+          expanded: true,
+        ),
+      ],
+    );
+  }
+
+  Widget _forecastPriorityTile(
+    AiForecastPrediction prediction,
+    int rank,
+    double total,
+  ) {
+    return ExpansionTile(
+      key: PageStorageKey<String>('forecast-priority-${prediction.fruit}'),
+      tilePadding: EdgeInsets.zero,
+      childrenPadding: const EdgeInsets.only(left: 78, bottom: 16),
+      shape: Border(bottom: BorderSide(color: AppColors.borderSoft)),
+      collapsedShape: Border(bottom: BorderSide(color: AppColors.borderSoft)),
+      iconColor: AppColors.textSecondary,
+      collapsedIconColor: AppColors.textSecondary,
+      leading: SizedBox(
+        width: 66,
+        height: 32,
+        child: Row(
+          children: <Widget>[
+            SizedBox(
+              width: 30,
+              child: Text(
+                '#$rank',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ),
+            SizedBox(width: 6),
+            SizedBox(
+              width: 30,
+              height: 30,
+              child: FruitMark(name: prediction.fruit, size: 30),
+            ),
+          ],
+        ),
+      ),
+      title: Row(
+        children: <Widget>[
+          Expanded(
+            child: Text(
+              prediction.fruit,
+              style: TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          SizedBox(width: 8),
+          _forecastPredictionBadge(prediction.recommendation),
+        ],
+      ),
+      subtitle: Text(
+        '${prediction.predictedKgTotal.toStringAsFixed(2)} kg | ${total > 0 ? (prediction.predictedKgTotal / total * 100).toStringAsFixed(1) : '0.0'}% of forecast',
+        style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+      ),
+      children: <Widget>[
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            prediction.reason.trim().isEmpty
+                ? _simpleForecastDetail(
+                    prediction.recommendation,
+                    prediction.fruit,
+                  )
+                : prediction.reason,
+            style: TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 13,
+              height: 1.5,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _forecastModelDetails(
+    AiAutomationResult forecast,
+    _ForecastChartData chart,
+  ) {
+    final AiForecastCoverage? coverage = forecast.coverage;
+    final AiForecastValidation? validation = forecast.validation;
+    return ExpansionTile(
+      key: const PageStorageKey<String>('forecast-model-details'),
+      tilePadding: EdgeInsets.zero,
+      childrenPadding: const EdgeInsets.only(bottom: 12),
+      shape: const Border(),
+      collapsedShape: const Border(),
+      iconColor: AppColors.textSecondary,
+      collapsedIconColor: AppColors.textSecondary,
+      title: Text(
+        'Forecast details',
+        style: TextStyle(
+          color: AppColors.textPrimary,
+          fontSize: 14,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      children: <Widget>[
+        _forecastDetailRow('Model', forecast.model),
+        _forecastDetailRow('Source', forecast.source),
+        _forecastDetailRow('Sales analyzed', chart.analyzedLabel),
+        if (coverage != null) ...<Widget>[
+          _forecastDetailRow(
+            'Selling days',
+            formatNumber(coverage.observedDays),
+          ),
+          if (coverage.dataStart != null && coverage.dataEnd != null)
+            _forecastDetailRow(
+              'Sales period',
+              '${_formatDate(coverage.dataStart!)} - ${_formatDate(coverage.dataEnd!)}',
+            ),
+          _forecastDetailRow('Fruits', formatNumber(coverage.fruits.length)),
+        ],
+        _forecastDetailRow('Latest sale', chart.lastUpdatedLabel),
+        if (validation != null &&
+            validation.evaluatedDays > 0 &&
+            validation.maeKg != null) ...<Widget>[
+          _forecastDetailRow(
+            'Average error',
+            '${validation.maeKg!.toStringAsFixed(2)} kg per fruit/day',
+          ),
+          _forecastDetailRow(
+            'Checked over',
+            '${validation.evaluatedDays} days',
+          ),
+        ],
+        if (forecast.explanationModel case final String model)
+          _forecastDetailRow('AI advice', model),
+        SizedBox(height: 12),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            forecast.summary,
+            style: TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 13,
+              height: 1.5,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _forecastDetailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          SizedBox(
+            width: 108,
+            child: Text(
+              label,
+              style: TextStyle(color: AppColors.textMuted, fontSize: 12),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 12,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -9697,7 +9826,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   _ForecastChartData _forecastChartData() {
     final DateTime now = DateTime.now();
     final DateTime today = DateTime(now.year, now.month, now.day);
-    final DateTime forecastStart = today.add(const Duration(days: 1));
+    final DateTime forecastStart = !_isGuestSession
+        ? _latestAiForecast?.forecastStart ?? today.add(const Duration(days: 1))
+        : today.add(const Duration(days: 1));
 
     if (!_isGuestSession) {
       final AiAutomationResult? forecast = _latestAiForecast;
@@ -12871,6 +13002,157 @@ class SectionTitle extends StatelessWidget {
       child: Text(
         text,
         style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+}
+
+class _DailyReportSheet extends StatefulWidget {
+  const _DailyReportSheet({required this.sales, this.preparedBy});
+  final List<LocalSale> sales;
+  final String? preparedBy;
+
+  @override
+  State<_DailyReportSheet> createState() => _DailyReportSheetState();
+}
+
+class _DailyReportSheetState extends State<_DailyReportSheet> {
+  late final DateTime _today = DailySalesReportService.businessDay(
+    DateTime.now(),
+  );
+  late DateTime _selectedDate = _today;
+
+  Future<void> _pickDate() async {
+    final DateTime firstDate = widget.sales.fold<DateTime>(
+      DateTime(_today.year),
+      (DateTime earliest, LocalSale sale) {
+        final DateTime day = DailySalesReportService.businessDay(sale.soldAt);
+        return day.isBefore(earliest) ? day : earliest;
+      },
+    );
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: firstDate,
+      lastDate: _today,
+      helpText: 'Select PDF date',
+      confirmText: 'Use this day',
+    );
+    if (picked != null && mounted) setState(() => _selectedDate = picked);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ReportExportData report = const DailySalesReportService().build(
+      reportDate: _selectedDate,
+      generatedAt: DateTime.now(),
+      sales: widget.sales,
+      preparedBy: widget.preparedBy,
+    );
+    final ReportDailySummary summary = report.dailySummary!;
+    return SafeArea(
+      top: false,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * 0.88,
+        ),
+        child: SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(
+            20,
+            16,
+            20,
+            20 + MediaQuery.viewInsetsOf(context).bottom,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  const Expanded(
+                    child: _ForecastSectionTitle('Daily sales PDF'),
+                  ),
+                  IconButton(
+                    tooltip: 'Close report',
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+              GhostButton(
+                label:
+                    '${_isSameDay(_selectedDate, _today) ? 'Today - ' : ''}${_formatDate(_selectedDate)}',
+                icon: Icons.calendar_month_rounded,
+                onPressed: _pickDate,
+              ),
+              if (!_isSameDay(_selectedDate, _today))
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: () => setState(() => _selectedDate = _today),
+                    icon: const Icon(Icons.today_rounded, size: 18),
+                    label: const Text('Today'),
+                  ),
+                ),
+              SizedBox(height: 20),
+              Text(
+                'Sales revenue',
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+              ),
+              SizedBox(height: 6),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  reportMoney(summary.revenueCentavos),
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+                ),
+              ),
+              SizedBox(height: 16),
+              Wrap(
+                spacing: 24,
+                runSpacing: 12,
+                children: <Widget>[
+                  Text(
+                    '${summary.completedSales} completed sales',
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 14,
+                    ),
+                  ),
+                  Text(
+                    '${(summary.weightGrams / 1000).toStringAsFixed(3)} kg sold',
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+              if (summary.cancelledSales > 0) ...<Widget>[
+                SizedBox(height: 12),
+                Text(
+                  '${summary.cancelledSales} cancelled sales excluded from totals.',
+                  style: TextStyle(color: AppColors.textMuted, fontSize: 12),
+                ),
+              ],
+              if (report.transactions.isEmpty) ...<Widget>[
+                SizedBox(height: 12),
+                Text(
+                  'No sales recorded on this date.',
+                  style: TextStyle(color: AppColors.textMuted, fontSize: 13),
+                ),
+              ],
+              SizedBox(height: 24),
+              PrimaryButton(
+                label: 'Download PDF',
+                icon: Icons.download_rounded,
+                expanded: true,
+                onPressed: () => Navigator.of(context).pop(report),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
