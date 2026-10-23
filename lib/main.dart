@@ -4876,7 +4876,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             title: '$recommendation ${prediction.fruit}',
             detail: prediction.reason.trim().isEmpty
                 ? simpleDetail
-                : '$simpleDetail ${prediction.reason.trim()}',
+                : prediction.reason.trim(),
             value: recommendation,
             note: 'Forecast action',
             badge: _forecastPredictionBadge(recommendation),
@@ -4886,21 +4886,23 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   }
 
   String _simpleForecastDetail(String recommendation, String fruit) {
-    final String clean = recommendation.toLowerCase();
-    if (clean.contains('heavy')) {
-      return '$fruit should be your main refill. Prioritize it before the others.';
-    }
-    if (clean.contains('medium')) {
-      return '$fruit needs a steady refill. Keep enough ready, but do not overstock.';
-    }
-    if (clean.contains('light')) {
-      return '$fruit only needs a small top-up for now.';
-    }
-    return 'Watch $fruit first. Refill only when sales start moving.';
+    return 'Compare expected $fruit sales with usable stock and delivery timing before deciding how much to buy.';
   }
 
   Widget _forecastPredictionBadge(String recommendation) {
     final String clean = recommendation.toLowerCase();
+    if (clean.contains('review')) {
+      return StatusBadge.orange('Review');
+    }
+    if (clean.contains('higher')) {
+      return StatusBadge.blue('Higher');
+    }
+    if (clean.contains('lower')) {
+      return StatusBadge.blue('Lower');
+    }
+    if (clean.contains('similar')) {
+      return StatusBadge.blue('Similar');
+    }
     if (clean.contains('heavy')) {
       return StatusBadge.red('Heavy');
     }
@@ -9746,7 +9748,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
             validation.evaluatedDays > 0 &&
             validation.maeKg != null) ...<Widget>[
           _forecastDetailRow(
-            'Average error',
+            'Model-selection error',
             '${validation.maeKg!.toStringAsFixed(2)} kg per fruit/day',
           ),
           _forecastDetailRow(

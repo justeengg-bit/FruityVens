@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 from xgboost import XGBRegressor
 
 from tool.forecast_seasonality import SEASONAL_FEATURES, SeasonalMarketHistory
+from tool.forecast_metrics import error_metrics
 
 try:
     import firebase_admin
@@ -58,6 +59,7 @@ VERIFY_FIREBASE_AUTH = REQUIRE_FIREBASE_AUTH or os.getenv(
 MIN_ML_ROWS = int(os.getenv("FRUITYVENS_FORECAST_MIN_ML_ROWS", "8"))
 MIN_OBSERVED_SALES_DAYS = int(os.getenv("FRUITYVENS_FORECAST_MIN_OBSERVED_DAYS", "30"))
 BUSINESS_TIMEZONE = ZoneInfo("Asia/Manila")
+CANDIDATE_MODELS = ["Weekly seasonal naive", "Recent average", "XGBRegressor"]
 MARKET_HISTORY = SeasonalMarketHistory.load()
 FORECAST_FEATURES = [
     "fruit_code",
@@ -96,6 +98,9 @@ class ForecastRequest(BaseModel):
     inventory: list[dict[str, Any]] = Field(default_factory=list)
     salesSnapshot: dict[str, Any] = Field(default_factory=dict)
     transactions: list[dict[str, Any]] = Field(default_factory=list)
+    include_generated_sales: bool = False
+    history_complete: bool = False
+    acceptable_daily_error_kg: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 @dataclass
@@ -128,12 +133,21 @@ def forecast(
     if not transactions.empty:
         # Today's ledger is incomplete. Train and validate on closed days only.
         transactions = transactions[transactions["date"] < today.date()].copy()
+    generated_count = int(transactions["generated"].sum()) if not transactions.empty else 0
+    if not request.include_generated_sales and not transactions.empty:
+        transactions = transactions[~transactions["generated"]].copy()
     data_coverage = _data_coverage(transactions)
+    data_coverage["excludedGeneratedTransactions"] = (
+        generated_count if not request.include_generated_sales else 0
+    )
+    data_coverage["historyCompleteDeclared"] = request.history_complete
     if transactions.empty:
         return _empty_response(
             source="FruityVens seasonal demand forecast",
             model="insufficient-data",
-            message="No completed sales before today are available for forecasting yet.",
+            message=("Only generated sample sales are available. Record genuine completed sales "
+                     "before using a vendor forecast." if generated_count else
+                     "No completed sales before today are available for forecasting yet."),
             data_coverage=data_coverage,
         )
     if data_coverage["observedDays"] < MIN_OBSERVED_SALES_DAYS:
@@ -148,6 +162,7 @@ def forecast(
         )
 
     daily = _daily_sales_frame(transactions)
+    data_coverage["assumedZeroFruitDays"] = int(daily["assumed_zero"].sum())
     if (today - daily["date"].max()).days > 30:
         return _empty_response(
             source="FruityVens seasonal demand forecast",
@@ -156,21 +171,35 @@ def forecast(
             data_coverage=data_coverage,
         )
     training, fruit_codes = _training_frame(daily)
-    validation = _validate_models(daily, request.horizon_days)
+    validation = _validate_models(daily, request.horizon_days, request.acceptable_daily_error_kg)
     model_name = validation["selectedModel"]
-    confidence = _confidence_label(transactions, validation)
+    confidence = _confidence_label(transactions, validation, request.history_complete)
     forecast_start = today + pd.Timedelta(days=1)
     model = None
     if len(training) >= MIN_ML_ROWS:
-        if model_name == "XGBRegressor":
+        if "XGBRegressor" in validation["selectedByFruit"].values():
             model = _train_model(training)
     else:
         model_name = "Recent average"
-    values = _forecast_values(
-        daily, model, fruit_codes, forecast_start, request.horizon_days, model_name
-    )
+    selected = {
+        fruit: (validation["selectedByFruit"].get(fruit, "Recent average")
+                if len(training) >= MIN_ML_ROWS else "Recent average")
+        for fruit in fruit_codes
+    }
+    values_by_model = {
+        name: _forecast_values(daily, model, fruit_codes, forecast_start, request.horizon_days, name)
+        for name in set(selected.values())
+    }
+    values = {fruit: values_by_model[name][fruit] for fruit, name in selected.items()}
+    evidence = {item["fruit"]: item for item in validation["perFruit"]}
     predictions = [
-        _prediction_payload(fruit, weights, daily, confidence, forecast_start)
+        _prediction_payload(
+            fruit, weights, daily,
+            _confidence_label(transactions[transactions["fruit"] == fruit],
+                              evidence.get(fruit, {}), request.history_complete),
+            forecast_start, evidence.get(fruit), request.history_complete,
+            bool(transactions["generated"].any()),
+        )
         for fruit, weights in values.items()
     ]
 
@@ -328,7 +357,7 @@ def _normalize_transactions(raw: pd.DataFrame) -> pd.DataFrame:
                 "weight_kg": weight_kg,
                 "unit_price": max(0, unit_price),
                 "total_centavos": max(0, total_centavos),
-                "generated": item.get("generated") is True
+                "generated": str(item.get("generated", "")).lower() == "true"
                 or str(item.get("cloudId", "")).startswith("sample_cdo_"),
             }
         )
@@ -386,6 +415,8 @@ def _fill_missing_days(daily: pd.DataFrame) -> pd.DataFrame:
         )
         filled.index.name = "date"
         filled["fruit"] = fruit
+        # A transaction ledger alone cannot establish why a day has no sale.
+        filled["assumed_zero"] = filled["transactions"].isna()
         for column in ["kg_sold", "revenue_centavos", "transactions"]:
             filled[column] = filled[column].fillna(0)
         filled["avg_unit_price"] = (
@@ -559,12 +590,17 @@ def _baseline_value(
     return float(history.tail(14)["kg_sold"].mean())
 
 
-def _validate_models(daily: pd.DataFrame, horizon_days: int) -> dict[str, Any]:
-    names = ["Weekly seasonal naive", "Recent average", "XGBRegressor"]
-    errors: dict[str, list[float]] = {name: [] for name in names}
-    actual_total = 0.0
-    validation_dates = set()
-    for offset in [2 * horizon_days + 1, horizon_days + 1]:
+def _validate_models(
+    daily: pd.DataFrame, horizon_days: int, tolerance_kg: float | None = None
+) -> dict[str, Any]:
+    """Choose each fruit's method on up to four earlier forecast windows.
+
+    These scores guide selection; independent policy accuracy is measured by
+    evaluate_forecast.py on later blocks whose sales are withheld.
+    """
+    records = []
+    for window in range(4, 0, -1):
+        offset = window * horizon_days + 1
         origin = daily["date"].max() - pd.Timedelta(days=offset)
         history = daily[daily["date"] <= origin].copy()
         if history.empty or history["date"].nunique() < 14:
@@ -576,7 +612,7 @@ def _validate_models(daily: pd.DataFrame, horizon_days: int) -> dict[str, Any]:
         start = origin + pd.Timedelta(days=2)
         candidate_values = {
             name: _forecast_values(history, model, codes, start, horizon_days, name)
-            for name in names
+            for name in CANDIDATE_MODELS
         }
         for fruit in codes:
             for index in range(horizon_days):
@@ -585,32 +621,50 @@ def _validate_models(daily: pd.DataFrame, horizon_days: int) -> dict[str, Any]:
                 if observed.empty:
                     continue
                 actual = float(observed["kg_sold"].iloc[0])
-                actual_total += actual
-                validation_dates.add(date)
-                for name in names:
-                    errors[name].append(
-                        abs(actual - candidate_values[name][fruit][index])
-                    )
-    candidates = [
-        {
-            "model": name,
-            "maeKg": round(float(np.mean(values)), 4),
-            "wapePercent": round(sum(values) / actual_total * 100, 2)
-            if actual_total > 0
-            else None,
+                for name in CANDIDATE_MODELS:
+                    records.append({"fruit": fruit, "date": date, "window": window,
+                                    "model": name, "actual_kg": actual,
+                                    "predicted_kg": candidate_values[name][fruit][index]})
+    rows = pd.DataFrame(records)
+
+    def scores(group):
+        metrics = error_metrics(group, tolerance_kg)
+        return {
+            "maeKg": metrics["mae_kg"], "wapePercent": metrics["wape_percent"],
+            "biasKg": metrics["bias_kg"],
+            "underforecastKg": metrics["underforecast_kg"],
+            "overforecastKg": metrics["overforecast_kg"],
+            "withinTolerancePercent": metrics["within_tolerance_percent"],
+            "acceptableDailyErrorKg": tolerance_kg,
+            "evaluatedDays": int(group["date"].nunique()),
+            "evaluatedWindows": int(group["window"].nunique()),
         }
-        for name, values in errors.items()
-        if values
-    ]
-    selected = min(candidates, key=lambda item: item["maeKg"]) if candidates else None
+
+    candidates, per_fruit, chosen_rows = [], [], []
+    selected_by_fruit = {fruit: "Recent average" for fruit in sorted(daily["fruit"].unique())}
+    if not rows.empty:
+        candidates = [{"model": name, **scores(rows[rows["model"] == name])}
+                      for name in CANDIDATE_MODELS]
+        for fruit, group in rows.groupby("fruit", sort=True):
+            alternatives = [{"model": name, **scores(group[group["model"] == name])}
+                            for name in CANDIDATE_MODELS]
+            winner = min(alternatives, key=lambda item: item["maeKg"])
+            selected_by_fruit[fruit] = winner["model"]
+            chosen_rows.append(group[group["model"] == winner["model"]])
+            per_fruit.append({"fruit": fruit, **winner, "candidates": alternatives})
+    selected_rows = pd.concat(chosen_rows) if chosen_rows else pd.DataFrame()
+    methods = set(selected_by_fruit.values())
     return {
         "method": "rolling-origin recursive forecast",
+        "evaluationPurpose": "model selection; not an independent accuracy estimate",
         "horizonDays": horizon_days,
-        "evaluatedDays": len(validation_dates),
-        "evaluatedFruitDays": len(errors[names[0]]),
-        "selectedModel": selected["model"] if selected else "Recent average",
-        "maeKg": selected["maeKg"] if selected else None,
-        "wapePercent": selected["wapePercent"] if selected else None,
+        **(scores(selected_rows) if not selected_rows.empty else {
+            "evaluatedDays": 0, "evaluatedWindows": 0, "maeKg": None, "wapePercent": None,
+        }),
+        "evaluatedFruitDays": len(selected_rows),
+        "selectedModel": next(iter(methods)) if len(methods) == 1 else "Per-fruit selection",
+        "selectedByFruit": selected_by_fruit,
+        "perFruit": per_fruit,
         "candidates": candidates,
     }
 
@@ -621,6 +675,9 @@ def _prediction_payload(
     daily: pd.DataFrame,
     confidence: str,
     forecast_start: pd.Timestamp,
+    evidence: dict[str, Any] | None = None,
+    history_complete: bool = False,
+    generated: bool = False,
 ) -> dict[str, Any]:
     rounded_predictions = [round(float(value), 2) for value in daily_predictions]
     total = float(sum(rounded_predictions))
@@ -629,14 +686,35 @@ def _prediction_payload(
     baseline = (
         float(fruit_days.tail(7)["kg_sold"].mean()) if not fruit_days.empty else 0
     )
+    evidence = evidence or {}
+    reason = _reason(fruit, total, baseline, confidence, len(daily_predictions))
+    if evidence.get("maeKg") is not None:
+        reason += (f" Recent checks for this fruit: average absolute error "
+                   f"{evidence['maeKg']:.2f} kg/day over {evidence['evaluatedDays']} days. "
+                   "These checks were used to choose its forecasting method.")
+        if evidence.get("withinTolerancePercent") is not None:
+            reason += (f" {evidence['withinTolerancePercent']:.0f}% of checked predictions "
+                       f"were within the chosen {evidence['acceptableDailyErrorKg']:.2f} kg tolerance.")
+    else:
+        reason += " This fruit does not yet have enough earlier checks to estimate its error."
+    if generated:
+        reason += " Generated sample data: demonstration only."
+    elif not history_complete:
+        reason += " Confirm the sales ledger is complete; gaps are assumed to be zero sales."
+    reason += " Check usable stock, spoilage, and delivery timing before deciding how much to buy."
     return {
         "fruit": fruit,
         "predictedKgTomorrow": round(tomorrow, 2),
         "predictedKgTotal": round(total, 2),
-        "recommendation": _recommendation(total, baseline, len(daily_predictions)),
+        "recommendation": ("Review estimate" if confidence == "low" else
+                           _recommendation(total, baseline, len(daily_predictions))),
         "confidence": confidence,
-        "reason": _reason(fruit, total, baseline, confidence, len(daily_predictions))
-        + _seasonal_reason(fruit, forecast_start),
+        "reason": reason + _seasonal_reason(fruit, forecast_start),
+        "model": evidence.get("model", "Recent average"),
+        "validation": evidence,
+        "assumedZeroDays": int(fruit_days["assumed_zero"].sum()),
+        "purchaseQuantityKg": None,
+        "planningBasis": "expected sales; usable stock and deliveries are not recorded",
         "seasonality": MARKET_HISTORY.context(fruit, forecast_start),
         "dailyPredictions": rounded_predictions,
     }
@@ -645,15 +723,12 @@ def _prediction_payload(
 def _recommendation(
     predicted_total: float, baseline_daily: float, horizon_days: int
 ) -> str:
-    heavy_threshold = max(5.0, baseline_daily * horizon_days * 1.25)
-    medium_threshold = max(2.0, baseline_daily * horizon_days * 0.65)
-    if predicted_total >= heavy_threshold:
-        return "Heavy restock"
-    if predicted_total >= medium_threshold:
-        return "Medium restock"
-    if predicted_total > 0:
-        return "Light top-up"
-    return "Watch"
+    baseline = baseline_daily * horizon_days
+    if predicted_total > baseline * 1.1:
+        return "Higher expected sales"
+    if predicted_total < baseline * 0.9:
+        return "Lower expected sales"
+    return "Similar expected sales"
 
 
 def _reason(
@@ -710,29 +785,30 @@ def _summary(
         for item in leaders
     )
     return (
-        f"Demand forecast for the next {horizon_days} days: {leader_text}. "
-        f"Model: {model_name}. Confidence is {confidence}; add more sales history "
-        "to make the forecast steadier."
+        f"Expected sales for the next {horizon_days} days: {leader_text}. "
+        f"Method: {model_name}. Evidence is {confidence}. "
+        "Compare these quantities with usable stock before buying. "
+        "Compare these estimates with later completed sales before relying on them for purchase decisions."
     )
 
 
-def _confidence_label(transactions: pd.DataFrame, validation: dict[str, Any]) -> str:
-    error = validation["wapePercent"]
+def _confidence_label(
+    transactions: pd.DataFrame, validation: dict[str, Any], history_complete: bool = False
+) -> str:
+    """Evidence label, not a calibrated probability or universal error threshold."""
     recent_day = transactions["date"].max()
     stale_days = (datetime.now(BUSINESS_TIMEZONE).date() - recent_day).days
     per_fruit_days = transactions.groupby("fruit")["date"].nunique().min()
     if (
         transactions["generated"].any()
-        or error is None
+        or validation.get("maeKg") is None
         or stale_days > 7
         or per_fruit_days < 30
+        or validation.get("evaluatedWindows", 0) < 4
+        or not history_complete
     ):
         return "low"
-    if validation["evaluatedDays"] >= 14 and error <= 25 and per_fruit_days >= 180:
-        return "high"
-    if validation["evaluatedDays"] >= 7 and error <= 50 and per_fruit_days >= 60:
-        return "medium"
-    return "low"
+    return "provisional"
 
 
 def _empty_response(
@@ -774,9 +850,14 @@ def _parse_date(value: Any) -> datetime | None:
         return None
     if isinstance(value, (int, float)):
         timestamp = float(value)
+        if not np.isfinite(timestamp):
+            return None
         if timestamp > 10_000_000_000:
             timestamp /= 1000
-        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        try:
+            return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        except (ValueError, OverflowError, OSError):
+            return None
     text = str(value).strip()
     if not text:
         return None
@@ -786,17 +867,19 @@ def _parse_date(value: Any) -> datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=BUSINESS_TIMEZONE)
     return parsed
 
 
 def _weight_kg(item: dict[str, Any]) -> float:
-    if item.get("weightKg") is not None:
-        return max(0, float(item["weightKg"]))
-    value = item.get("weightGrams") or item.get("weight")
+    if item.get("weightKg") is not None and not pd.isna(item["weightKg"]):
+        return _nonnegative_number(item["weightKg"])
+    if item.get("weightGrams") is not None and not pd.isna(item["weightGrams"]):
+        return _nonnegative_number(item["weightGrams"]) / 1000
+    value = item.get("weight")
     if value is None:
         return 0
-    amount = float(value)
+    amount = _nonnegative_number(value)
     if amount > 50:
         return max(0, amount / 1000)
     return max(0, amount)
@@ -805,7 +888,15 @@ def _weight_kg(item: dict[str, Any]) -> float:
 def _centavos(value: Any, *, cents_when_integer: bool = False) -> int:
     if value is None:
         return 0
-    number = float(value)
+    number = _nonnegative_number(value)
     if cents_when_integer:
         return round(number)
     return round(number * 100)
+
+
+def _nonnegative_number(value: Any) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return max(0.0, number) if np.isfinite(number) else 0.0

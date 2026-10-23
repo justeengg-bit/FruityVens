@@ -28,11 +28,12 @@ import xgboost
 from matplotlib.backends.backend_pdf import PdfPages
 
 from tool import forecast_server as server
+from tool.forecast_metrics import error_metrics
 
 ROOT = Path(__file__).resolve().parents[1]
-MODELS = ["Weekly seasonal naive", "Recent average", "XGBRegressor"]
-COLORS = {MODELS[0]: "#d08b24", MODELS[1]: "#208570", MODELS[2]: "#456cc4"}
-MODEL_LABELS = {MODELS[0]: "Previous week", MODELS[1]: "Recent average", MODELS[2]: "XGBoost"}
+MODELS = [*server.CANDIDATE_MODELS, "Selected policy"]
+COLORS = {MODELS[0]: "#d08b24", MODELS[1]: "#208570", MODELS[2]: "#456cc4", MODELS[3]: "#a14678"}
+MODEL_LABELS = {MODELS[0]: "Previous week", MODELS[1]: "Recent average", MODELS[2]: "XGBoost", MODELS[3]: "Selected policy"}
 
 
 def load_sales(path: Path, exclude_generated: bool = False):
@@ -61,15 +62,6 @@ def load_sales(path: Path, exclude_generated: bool = False):
         if exclude_generated and generated:
             continue
         row["generated"] = generated
-        # Respect declared units without the legacy server's small-gram heuristic.
-        if row.get("weightKg") is None and row.get("weightGrams") is not None:
-            row["weightKg"] = float(row["weightGrams"]) / 1000
-        stamp = row.get("soldAt") or row.get("timestamp")
-        if isinstance(stamp, str):
-            parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=server.BUSINESS_TIMEZONE)
-            row["soldAt"] = parsed.isoformat()
         prepared.append(row)
     transactions = server._normalize_transactions(pd.DataFrame(prepared))
     if transactions.empty:
@@ -78,7 +70,9 @@ def load_sales(path: Path, exclude_generated: bool = False):
     complete = transactions["date"] < today
     excluded_partial_day = None
     if document.get("cutoff"):
-        cutoff = datetime.fromisoformat(document["cutoff"])
+        cutoff = server._parse_date(document["cutoff"])
+        if cutoff is None:
+            raise ValueError("The input cutoff must be a valid date or timestamp.")
         excluded_partial_day = cutoff.astimezone(server.BUSINESS_TIMEZONE).date()
         complete &= transactions["date"] < excluded_partial_day
     transactions = transactions[complete].copy()
@@ -89,33 +83,17 @@ def load_sales(path: Path, exclude_generated: bool = False):
     return transactions, excluded_partial_day
 
 
-def error_metrics(rows: pd.DataFrame) -> dict:
-    actual = rows["actual_kg"].to_numpy(dtype=float)
-    predicted = rows["predicted_kg"].to_numpy(dtype=float)
-    absolute = np.abs(predicted - actual)
-    total = float(actual.sum())
-    return {
-        "mae_kg": float(absolute.mean()),
-        "rmse_kg": float(np.sqrt(np.mean((predicted - actual) ** 2))),
-        "wape_percent": float(absolute.sum() / total * 100) if total > 0 else None,
-        "bias_kg": float(np.mean(predicted - actual)),
-        "actual_kg": total,
-        "predicted_kg": float(predicted.sum()),
-        "fruit_days": len(rows),
-    }
-
-
-def summarize(rows: pd.DataFrame, by: list[str]) -> pd.DataFrame:
+def summarize(rows: pd.DataFrame, by: list[str], tolerance_kg: float | None = None) -> pd.DataFrame:
     result = []
     for keys, group in rows.groupby(by, sort=False):
         if not isinstance(keys, tuple):
             keys = (keys,)
-        result.append({**dict(zip(by, keys)), **error_metrics(group)})
+        result.append({**dict(zip(by, keys)), **error_metrics(group, tolerance_kg)})
     return pd.DataFrame(result)
 
 
 def backtest(daily: pd.DataFrame, test_weeks: int, horizon: int):
-    """Freeze model choice on development data; evaluate later rolling blocks."""
+    """Evaluate fixed candidates and the actual selection procedure on later blocks."""
     test_start = daily["date"].max() - pd.Timedelta(days=test_weeks * horizon - 1)
     # Mimic the app: latest closed sales precede an incomplete day, then tomorrow.
     first_origin = test_start - pd.Timedelta(days=2)
@@ -132,9 +110,19 @@ def backtest(daily: pd.DataFrame, test_weeks: int, horizon: int):
         history = daily[daily["date"] <= origin].copy()
         training, codes = server._training_frame(history)
         model = server._train_model(training)
+        # Selection only sees records available before this forecast is issued.
+        current_selection = selection if fold == 0 else server._validate_models(history, horizon)
+        chosen = current_selection["selectedByFruit"]
         print(f"Evaluating block {fold + 1}/{test_weeks}: {start.date()} onward", flush=True)
+        forecasts = {
+            name: server._forecast_values(history, model, codes, start, horizon, name)
+            for name in server.CANDIDATE_MODELS
+        }
+        forecasts["Selected policy"] = {
+            fruit: forecasts[chosen.get(fruit, "Recent average")][fruit] for fruit in codes
+        }
         for name in MODELS:
-            values = server._forecast_values(history, model, codes, start, horizon, name)
+            values = forecasts[name]
             for fruit, predictions in values.items():
                 for index, prediction in enumerate(predictions):
                     date = start + pd.Timedelta(days=index)
@@ -150,6 +138,7 @@ def backtest(daily: pd.DataFrame, test_weeks: int, horizon: int):
                         "horizon_day": index + 1,
                         "fruit": fruit,
                         "model": name,
+                        "model_used": chosen.get(fruit, "Recent average") if name == "Selected policy" else name,
                         "actual_kg": actual,
                         "predicted_kg": float(prediction),
                         "error_kg": float(prediction) - actual,
@@ -163,6 +152,54 @@ def backtest(daily: pd.DataFrame, test_weeks: int, horizon: int):
     if not (common == len(MODELS)).all():
         raise ValueError("Models did not evaluate the same fruit-days.")
     return rows, development, selection
+
+
+def planning_totals(predictions: pd.DataFrame, horizon: int) -> pd.DataFrame:
+    """Keep each fruit and forecast period separate; timing errors may cancel only here."""
+    rows = predictions.groupby(["model", "fruit", "block"], as_index=False).agg(
+        date=("date", "min"), actual_kg=("actual_kg", "sum"),
+        predicted_kg=("predicted_kg", "sum"), days=("date", "nunique"),
+    )
+    rows = rows[rows["days"] == horizon].copy()
+    rows["error_kg"] = rows["predicted_kg"] - rows["actual_kg"]
+    rows["absolute_error_kg"] = rows["error_kg"].abs()
+    return rows
+
+
+def vendor_assessment(predictions, totals, metadata):
+    """Describe tolerance checks without assigning a universal accuracy threshold."""
+    records = []
+    for fruit, rows in predictions[predictions["model"] == "Selected policy"].groupby("fruit"):
+        daily = error_metrics(rows, metadata["daily_tolerance_kg"])
+        period_rows = totals[(totals["model"] == "Selected policy") & (totals["fruit"] == fruit)]
+        period = error_metrics(period_rows, metadata["period_tolerance_kg"])
+        baseline_rows = predictions[(predictions["model"] == "Recent average") & (predictions["fruit"] == fruit)]
+        baseline = error_metrics(baseline_rows)["mae_kg"]
+        status = "Tolerance target not specified"
+        target = metadata["target_within_tolerance_percent"]
+        rates = [rate for rate in [daily["within_tolerance_percent"], period["within_tolerance_percent"]]
+                 if rate is not None]
+        if target is not None and rates:
+            status = "Within chosen target on tested records" if all(rate >= target for rate in rates) else "Outside chosen target on tested records"
+        if metadata["generated_transactions"]:
+            status = "Sample demonstration only"
+        elif not metadata["history_complete_declared"]:
+            status = "Confirm complete sales records first"
+        records.append({
+            "fruit": fruit, "daily_mae_kg": daily["mae_kg"],
+            "daily_wape_percent": daily["wape_percent"],
+            "daily_bias_kg": daily["bias_kg"],
+            "daily_underforecast_kg": daily["underforecast_kg"],
+            "daily_overforecast_kg": daily["overforecast_kg"],
+            "period_mae_kg": period["mae_kg"], "period_wape_percent": period["wape_percent"],
+            "daily_within_tolerance_percent": daily["within_tolerance_percent"],
+            "period_within_tolerance_percent": period["within_tolerance_percent"],
+            "daily_tolerance_kg": metadata["daily_tolerance_kg"],
+            "period_tolerance_kg": metadata["period_tolerance_kg"],
+            "improvement_vs_recent_average_percent": (1 - daily["mae_kg"] / baseline) * 100 if baseline > 0 else None,
+            "tested_days": len(rows), "tested_periods": len(period_rows), "assessment": status,
+        })
+    return pd.DataFrame(records)
 
 
 def learning_history(development: pd.DataFrame):
@@ -212,7 +249,7 @@ def date_axis(ax):
     ax.set_xlabel("Date")
 
 
-def generate_figures(output, transactions, daily, predictions, metrics, learning, provenance):
+def generate_figures(output, transactions, daily, predictions, metrics, learning, provenance, periods, assessment, horizon):
     plt.rcParams.update({
         "font.family": "DejaVu Sans", "font.size": 10,
         "axes.spines.top": False, "axes.spines.right": False,
@@ -275,13 +312,15 @@ def generate_figures(output, transactions, daily, predictions, metrics, learning
         labels = [MODEL_LABELS[name] for name in metrics["model"]]
         for ax, column, label in [(axes[0], "mae_kg", "MAE (kg per fruit/day)"),
                                   (axes[1], "wape_percent", "WAPE (%)")]:
-            bars = ax.bar(labels, metrics[column], color=[COLORS[n] for n in metrics["model"]], width=0.6)
+            values = pd.to_numeric(metrics[column], errors="coerce")
+            bars = ax.bar(labels, values.fillna(0), color=[COLORS[n] for n in metrics["model"]], width=0.6)
             ax.set_ylabel(label)
             ax.set_title("Lower error is better")
-            ax.set_ylim(0, max(metrics[column]) * 1.23)
-            ax.bar_label(bars, fmt="%.2f", padding=5, fontsize=11)
+            ax.set_ylim(0, max(1.0, values.fillna(0).max()) * 1.23)
+            ax.bar_label(bars, labels=[f"{v:.2f}" if pd.notna(v) else "Undefined" for v in values], padding=5, fontsize=10)
+            ax.tick_params(axis="x", labelsize=9)
         figures.save(fig, "05_model_comparison", "Forecast errors on later test periods",
-                     "All methods predict the same fruit-days with a recursive seven-day horizon. Errors are computed before rounding; these are test scores, not training scores.")
+                     f"All methods predict the same fruit-days over {horizon}-day blocks. Selected policy chooses a method per fruit using earlier sales only. Scores use unrounded predictions.")
 
         columns = min(3, len(fruit_order))
         rows = math.ceil(len(fruit_order) / columns)
@@ -292,6 +331,8 @@ def generate_figures(output, transactions, daily, predictions, metrics, learning
             for name in MODELS:
                 part = predictions[(predictions["fruit"] == fruit) & (predictions["model"] == name)].sort_values("date")
                 ax.plot(part["date"], part["predicted_kg"], color=COLORS[name], lw=1.25, ls="--", label=MODEL_LABELS[name])
+            for boundary in predictions["forecast_start"].unique()[1:]:
+                ax.axvline(pd.Timestamp(boundary), color="#777777", lw=0.8, ls=":")
             ax.set_title(fruit, fontweight="bold")
             ax.set_ylabel("kg/day")
             ax.set_ylim(bottom=0)
@@ -299,16 +340,16 @@ def generate_figures(output, transactions, daily, predictions, metrics, learning
         for ax in list(axes.flat)[len(fruit_order):]:
             ax.set_visible(False)
         handles, labels = axes.flat[0].get_legend_handles_labels()
-        fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 0.045), ncol=4, frameon=False)
+        fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 0.045), ncol=5, frameon=False, fontsize=9)
         figures.save(fig, "06_actual_vs_predicted", "Actual versus predicted sales by fruit",
-                     "Forecasts are issued in separate seven-day blocks with a one-day bridge. Models refit before each block; actual values within a block never become recursive forecast inputs.")
+                     f"Dotted boundaries mark new {horizon}-day forecast blocks. Selection and training use only earlier sales; actual sales within a block never become forecast inputs. Reference actuals are sample values when the dataset is generated.")
 
         fig, ax = plt.subplots(figsize=(12, 5.5))
         ax.plot(learning["boosting_round"], learning["training_mae_kg"], color="#456cc4", lw=2, label="Training MAE")
         ax.plot(learning["boosting_round"], learning["validation_mae_kg"], color="#d08b24", lw=2, label="Development validation MAE")
         ax.set(xlabel="Boosting round (tree added)", ylabel="MAE (kg per fruit/day)", ylim=(0, None))
         ax.legend(frameon=False)
-        figures.save(fig, "07_learning_curve", "XGBoost learning curve on development data",
+        figures.save(fig, "07_learning_curve", "Training and validation MAE versus boosting rounds",
                      "One-day-ahead diagnostic: validation features use earlier observed sales. This is not the recursive seven-day test score; the final test period is excluded entirely.")
 
         xgb = predictions[predictions["model"] == MODELS[2]]
@@ -323,13 +364,60 @@ def generate_figures(output, transactions, daily, predictions, metrics, learning
         axes[1].set(xlabel="Prediction minus actual (kg)", ylabel="Number of fruit-days", title="Negative: underforecast / positive: overforecast")
         figures.save(fig, "08_prediction_errors", "XGBoost agreement and error distribution",
                      "A point near the diagonal indicates close agreement. Signed errors show the direction of misses; opposite errors do not cancel in MAE or WAPE.")
+
+        fig, axes = plt.subplots(rows, columns, figsize=(14, 3.2 * rows), squeeze=False)
+        for ax, fruit in zip(axes.flat, fruit_order):
+            observed = periods[(periods["fruit"] == fruit) & (periods["model"] == "Selected policy")].sort_values("block")
+            ax.plot(observed["block"], observed["actual_kg"], "o-", color="#293642", label="Actual period sales")
+            for name in ["Recent average", "Selected policy"]:
+                part = periods[(periods["fruit"] == fruit) & (periods["model"] == name)].sort_values("block")
+                ax.plot(part["block"], part["predicted_kg"], "o--", color=COLORS[name], label=MODEL_LABELS[name])
+            ax.set(title=fruit, xlabel="Forecast block", ylabel=f"kg / {horizon}-day period", ylim=(0, None))
+            ax.set_xticks(observed["block"])
+        for ax in list(axes.flat)[len(fruit_order):]:
+            ax.set_visible(False)
+        handles, labels = axes.flat[0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 0.045), ncol=3, frameon=False)
+        figures.save(fig, "09_period_sales", f"Actual and predicted {horizon}-day sales totals",
+                     "Totals are calculated separately for each fruit and forecast block. Good agreement here can hide errors in daily timing; read alongside the daily plots. These are sales quantities, not recommended purchase quantities.")
+
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        ordered = assessment.sort_values("daily_mae_kg")
+        axes[0].barh(ordered["fruit"], ordered["daily_mae_kg"], color=COLORS["Selected policy"])
+        axes[1].barh(ordered["fruit"], ordered["period_mae_kg"], color=COLORS["Selected policy"])
+        axes[0].set(xlabel="MAE (kg per fruit/day)", title="Daily error")
+        axes[1].set(xlabel=f"MAE (kg per fruit/{horizon}-day period)", title="Period-total error")
+        figures.save(fig, "10_fruit_errors", "Selected forecasting policy: errors by fruit",
+                     "Each bar measures later errors after choosing the method on earlier history. Lower is better; an acceptable error depends on the vendor's quantities, replenishment timing, and costs.")
+
+        fig, ax = plt.subplots(figsize=(12, 5.5))
+        for name in MODELS:
+            part = predictions[predictions["model"] == name].groupby("horizon_day")["absolute_error_kg"].mean()
+            ax.plot(part.index, part.values, "o-", color=COLORS[name], label=MODEL_LABELS[name])
+        ax.set(xlabel="Requested forecast day (day 1 is tomorrow)", ylabel="MAE (kg per fruit/day)", ylim=(0, None))
+        ax.set_xticks(range(1, horizon + 1))
+        ax.legend(frameon=False)
+        figures.save(fig, "11_horizon_errors", "Forecast error by distance into the future",
+                     "Compare the requested forecast days on the same test blocks. A predicted bridge day precedes day 1 because the current day's ledger is incomplete. A longer horizon need not have monotonically increasing errors.")
     return figures.items
 
 
-def write_report(output, metadata, metrics, figures):
+def display(value, digits=2, suffix=""):
+    return "Not assessed" if value is None or pd.isna(value) else f"{value:.{digits}f}{suffix}"
+
+
+def write_report(output, metadata, metrics, figures, period_metrics, assessment):
     score_rows = "\n".join(
-        f"| {row.model} | {row.mae_kg:.3f} | {row.rmse_kg:.3f} | {row.wape_percent:.2f}% | {row.bias_kg:+.3f} |"
+        f"| {row.model} | {row.mae_kg:.3f} | {row.rmse_kg:.3f} | {display(row.wape_percent, suffix='%')} | {row.bias_kg:+.3f} |"
         for row in metrics.itertuples()
+    )
+    period_score_rows = "\n".join(
+        f"| {r.model} | {r.mae_kg:.3f} | {display(r.wape_percent, suffix='%')} | {r.underforecast_kg:.3f} | {r.overforecast_kg:.3f} |"
+        for r in period_metrics.itertuples()
+    )
+    fruit_score_rows = "\n".join(
+        f"| {r.fruit} | {r.daily_mae_kg:.3f} | {r.period_mae_kg:.3f} | {display(r.improvement_vs_recent_average_percent, suffix='%')} | {display(r.daily_within_tolerance_percent, suffix='%')} | {display(r.period_within_tolerance_percent, suffix='%')} | {r.assessment} |"
+        for r in assessment.itertuples()
     )
     captions = "\n\n".join(
         f"### {item['title']}\n\n![{item['title']}]({item['stem']}.png)\n\n{item['caption']}\n\n[PDF]({item['stem']}.pdf)"
@@ -345,9 +433,9 @@ Partial day excluded: {metadata['excluded_partial_day'] or 'none declared'}.
 
 ## Chronological test design
 
-The first development period ends {metadata['development_end']}. Model selection uses only that period,
-with the server's two historical seven-day validation windows. The selected method is
-**{metadata['selected_on_development']}** and is fixed before inspecting test results.
+The first development period ends {metadata['development_end']}. The service chooses a method
+separately for each fruit using up to four earlier forecast windows and lowest daily MAE.
+The initial choice is **{metadata['selected_on_development']}**.
 The later test period runs {metadata['test_start']} through {metadata['test_end']},
 with {metadata['test_weeks']} successive {metadata['horizon_days']}-day blocks. Each block trains on
 records ending two calendar days before the first forecast date, reproducing the app's one-day
@@ -356,9 +444,14 @@ before later blocks using only data available at that block's origin; no actual 
 forecast horizon is supplied back as an input. This is rolling operational evaluation, not one
 single {metadata['test_weeks'] * metadata['horizon_days']}-day-ahead forecast.
 
-All models score the same {metadata['evaluated_fruit_days']} fruit-days.
-The numerically lowest test score is descriptive; the test period is not used to retune the model
-or retrospectively change the development-selected method. Default production parameters are reused.
+All methods score the same {metadata['evaluated_fruit_days']} fruit-days. **Selected policy** is the
+system's actual procedure: choose the method for each fruit using only records available before
+each block, then score it on the later sales. Earlier test-block sales can enter training and
+selection for later blocks once they would have become available. They never enter an earlier
+forecast. The policy is not a fourth machine learning model. Fixed candidate scores remain visible.
+Default XGBoost parameters are reused; no tuning uses the upcoming block. Previously examined
+datasets cannot serve as fresh confirmatory experiments. The bundled generated sample has already
+been examined during development and remains a demonstration.
 
 ## Comparison on the test periods
 
@@ -371,6 +464,36 @@ WAPE = sum of absolute errors / total actual kilograms × 100; it is undefined w
 are zero. Bias = mean(prediction − actual); positive means overforecasting. WAPE is an error
 percentage, not classification accuracy. Do not report 100 − WAPE as a generic accuracy score.
 
+## Quantities over a planning period
+
+The period is **{metadata['horizon_days']} days**. There are
+{metadata['evaluated_fruit_periods']} complete fruit-periods per method. These errors first sum
+sales within each fruit/period, then compare totals; they differ from averaging daily errors.
+
+| Method | MAE (kg/fruit/period) | WAPE of period totals | Total underforecast (kg) | Total overforecast (kg) |
+| --- | ---: | ---: | ---: | ---: |
+{period_score_rows}
+
+Underforecast and overforecast compare predictions with recorded sales. They are **not measured
+stockouts, lost sales, leftover stock, or spoilage**. Those outcomes require stock and operational
+records. Daily errors must still be checked because fruit is perishable and the timing matters.
+
+## What a vendor can assess
+
+| Fruit | Daily MAE (kg) | Period MAE (kg) | Daily improvement vs recent average | Days within tolerance | Periods within tolerance | Evidence status |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+{fruit_score_rows}
+
+Positive improvement means the selected procedure beat the recent-average baseline on the same
+fruit-days; negative means it did worse. Zero baseline error makes the percentage undefined.
+Daily tolerance: **{display(metadata['daily_tolerance_kg'], suffix=' kg')}**;
+period-total tolerance: **{display(metadata['period_tolerance_kg'], suffix=' kg')}**;
+required share within tolerance: **{display(metadata['target_within_tolerance_percent'], suffix='%')}**.
+These limits must be chosen with the vendor before checking the final evaluation. No universal
+acceptable percentage is assumed. Meeting a chosen target on these records does not guarantee
+future performance. The current app supplies fruit prices but no usable stock quantities, so
+forecasts describe expected sales and do not calculate an order quantity.
+
 ## Interpretation and limits
 
 The sales-history plots are exploratory and do not measure forecast accuracy. The learning curve
@@ -380,19 +503,23 @@ seasonality comes from the same bundled PSA features as the production server. M
 after a fruit's introduction are assumed to have zero recorded sales, as in the app. Closures,
 stockouts, and missing uploads cannot be distinguished from zero demand. The target is recorded
 sales, not unconstrained customer demand. Fruits absent from a block's training history are not
-evaluated in that block. Results from generated records demonstrate the pipeline, not measured
+evaluated in that block. History declared complete: {metadata['history_complete_declared']}.
+Assumed zero fruit-days: {metadata['assumed_zero_fruit_days']}. Results from generated records demonstrate the pipeline, not measured
 real-world vendor performance. No phone, Firebase, or hosted-service records were read or changed.
 
 ## Files
 
 - `index.html`: local visual report; open in any browser.
-- `all_figures.pdf`: all eight figures in one document.
+- `all_figures.pdf`: all {len(figures)} figures in one document.
 - `predictions.csv`: every model/date/fruit prediction, actual, signed error, and absolute error.
-- `actual_vs_predicted.csv`: side-by-side actual kilograms and all three forecasts.
+- `actual_vs_predicted.csv`: actual kilograms, the three candidate forecasts, and the selected policy.
 - `model_metrics.csv`, `fruit_metrics.csv`, `block_metrics.csv`, `horizon_metrics.csv`: error tables.
+- `period_predictions.csv`, `period_metrics.csv`, `fruit_period_metrics.csv`: total quantities and errors per planning period.
+- `vendor_assessment.csv`: per-fruit baseline comparison and chosen tolerance checks.
+- `selection_history.csv`: the method chosen before each fruit's test block.
 - `daily_sales.csv`: daily kilograms, revenue in centavos, transaction counts, and price per fruit.
 - `learning_curve.csv`: training and development-validation MAE by boosting round.
-- `development_selection.json`: the model comparison conducted before the test period.
+- `development_selection.json`: initial per-fruit choices using earlier validation records.
 - `run_metadata.json`: source hashes, dates, parameters, and library versions.
 
 ## Figures
@@ -402,9 +529,18 @@ real-world vendor performance. No phone, Firebase, or hosted-service records wer
     (output / "README.md").write_text(report, encoding="utf-8")
     headers = "<tr><th>Method</th><th>MAE (kg/fruit/day)</th><th>RMSE</th><th>WAPE</th><th>Bias (kg)</th></tr>"
     rows = "".join(
-        f"<tr><td>{html.escape(r.model)}</td><td>{r.mae_kg:.3f}</td><td>{r.rmse_kg:.3f}</td><td>{r.wape_percent:.2f}%</td><td>{r.bias_kg:+.3f}</td></tr>"
+        f"<tr><td>{html.escape(r.model)}</td><td>{r.mae_kg:.3f}</td><td>{r.rmse_kg:.3f}</td><td>{display(r.wape_percent, suffix='%')}</td><td>{r.bias_kg:+.3f}</td></tr>"
         for r in metrics.itertuples()
     )
+    vendor_table = assessment[["fruit", "daily_mae_kg", "period_mae_kg",
+                               "improvement_vs_recent_average_percent",
+                               "daily_within_tolerance_percent", "period_within_tolerance_percent",
+                               "assessment"]].rename(columns={
+        "fruit": "Fruit", "daily_mae_kg": "Daily MAE (kg)", "period_mae_kg": "Period MAE (kg)",
+        "improvement_vs_recent_average_percent": "Improvement vs average (%)",
+        "daily_within_tolerance_percent": "Days within tolerance (%)",
+        "period_within_tolerance_percent": "Periods within tolerance (%)", "assessment": "Evidence status",
+    }).to_html(index=False, float_format=lambda v: f"{v:.2f}", na_rep="Not assessed", border=0)
     cards = "\n".join(
         f'<section><h2>{html.escape(f["title"])}</h2><a href="{f["stem"]}.png"><img loading="lazy" src="{f["stem"]}.png" alt="{html.escape(f["title"])}"></a><p>{html.escape(f["caption"])}</p><a href="{f["stem"]}.pdf">Download figure PDF</a></section>'
         for f in figures
@@ -423,30 +559,59 @@ a{{color:#235ea8}}.scroll{{overflow:auto}}small{{color:#586776}}
 <div class="intro"><p>{metadata['transaction_count']:,} completed transactions · {metadata['fruit_count']} fruits ·
 {metadata['sales_start']} to {metadata['sales_end']}</p>
 <p>Later test period: <b>{metadata['test_start']} to {metadata['test_end']}</b>, evaluated in
-{metadata['test_weeks']} successive {metadata['horizon_days']}-day forecast blocks. Development-selected method:
-<b>{html.escape(metadata['selected_on_development'])}</b>. Lower errors are better.</p>
+{metadata['test_weeks']} successive {metadata['horizon_days']}-day forecast blocks. Selected policy chooses
+a method for each fruit before each block using earlier sales. Lower errors are better.</p>
 <div class="scroll"><table>{headers}{rows}</table></div>
 <p><a href="all_figures.pdf">Download all figures (PDF)</a> · <a href="predictions.csv">Prediction data (CSV)</a> ·
 <a href="README.md">Methodology and interpretation</a> · <a href="run_metadata.json">Run metadata</a></p>
-<small>Model parameters and selection use development data. Training is repeated before each later block.
+<small>Selection and training are repeated using earlier history before each later block.
 The learning curve is a separate one-day-ahead diagnostic. Generated sales cannot establish real vendor accuracy.</small></div>
+<section><h2>Does the forecast help sales planning?</h2>
+<p>Compare daily errors, {metadata['horizon_days']}-day total errors, and performance against the recent average.
+Positive improvement means smaller daily errors than the average. Tolerance checks need limits chosen with the vendor.</p>
+<p>Daily tolerance: {display(metadata['daily_tolerance_kg'], suffix=' kg')}; period tolerance:
+{display(metadata['period_tolerance_kg'], suffix=' kg')}; target share within tolerance:
+{display(metadata['target_within_tolerance_percent'], suffix='%')}.</p>
+<div class="scroll">{vendor_table}</div>
+<p>Expected sales must be compared with usable stock and delivery timing before buying.
+Forecast under- or overestimation does not measure actual spoilage or lost sales.</p>
+<p><a href="vendor_assessment.csv">Vendor assessment CSV</a> · <a href="period_metrics.csv">Period error CSV</a> ·
+<a href="selection_history.csv">Methods chosen before each forecast</a></p></section>
 {cards}</main></html>""", encoding="utf-8")
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=ROOT / "assets/data/cdo_sample_sales_2026.json")
-    parser.add_argument("--output", type=Path, default=ROOT / "reports/forecast_evaluation/sample")
+    parser.add_argument("--output", type=Path, default=ROOT / "reports/forecast_evaluation/revised_sample")
     parser.add_argument("--test-weeks", type=int, default=4)
     parser.add_argument("--horizon-days", type=int, default=7)
     parser.add_argument("--exclude-generated", action="store_true")
+    parser.add_argument("--history-complete", action="store_true",
+                        help="Declare that all operating-day sales, including zero sales, are represented.")
+    parser.add_argument("--daily-tolerance-kg", type=float,
+                        help="Vendor-chosen acceptable absolute error per fruit/day; no default.")
+    parser.add_argument("--period-tolerance-kg", type=float,
+                        help="Vendor-chosen acceptable error in each fruit's horizon total; no default.")
+    parser.add_argument("--target-within-tolerance-percent", type=float,
+                        help="Vendor-chosen share of forecasts that should meet the specified tolerance.")
     args = parser.parse_args(argv)
     if args.test_weeks < 1 or not 1 <= args.horizon_days <= 14:
         parser.error("Use at least one test week/block and a horizon of 1–14 days.")
+    for tolerance in [args.daily_tolerance_kg, args.period_tolerance_kg]:
+        if tolerance is not None and (not math.isfinite(tolerance) or tolerance < 0):
+            parser.error("Tolerances must be finite, nonnegative kilograms.")
+    if args.target_within_tolerance_percent is not None:
+        if not 0 < args.target_within_tolerance_percent <= 100:
+            parser.error("The target share must be greater than zero and at most 100 percent.")
+        if args.daily_tolerance_kg is None and args.period_tolerance_kg is None:
+            parser.error("Specify a daily or period tolerance before choosing a target share.")
     transactions, partial = load_sales(args.input, args.exclude_generated)
     daily = server._daily_sales_frame(transactions)
     predictions, development, selection = backtest(daily, args.test_weeks, args.horizon_days)
-    metrics = summarize(predictions, ["model"]).set_index("model").loc[MODELS].reset_index()
+    metrics = summarize(predictions, ["model"], args.daily_tolerance_kg).set_index("model").loc[MODELS].reset_index()
+    totals = planning_totals(predictions, args.horizon_days)
+    period_metrics = summarize(totals, ["model"], args.period_tolerance_kg).rename(columns={"fruit_days": "fruit_periods"})
     learning, validation_start = learning_history(development)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -460,6 +625,8 @@ def main(argv=None):
         "input": str(args.input.resolve()),
         "input_sha256": hashlib.sha256(args.input.read_bytes()).hexdigest(),
         "forecast_source_sha256": hashlib.sha256((ROOT / "tool/forecast_server.py").read_bytes()).hexdigest(),
+        "evaluation_source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "metrics_source_sha256": hashlib.sha256((ROOT / "tool/forecast_metrics.py").read_bytes()).hexdigest(),
         "seasonality_source_sha256": hashlib.sha256((ROOT / "tool/forecast_seasonality.py").read_bytes()).hexdigest(),
         "psa_asset_sha256": hashlib.sha256((ROOT / "assets/data/psa_market_history.json").read_bytes()).hexdigest(),
         "provenance": provenance,
@@ -473,11 +640,18 @@ def main(argv=None):
         "test_end": str(predictions["date"].max().date()),
         "test_weeks": args.test_weeks, "horizon_days": args.horizon_days,
         "evaluated_fruit_days": int(len(predictions) / len(MODELS)),
+        "evaluated_fruit_periods": int(len(totals) / len(MODELS)),
+        "assumed_zero_fruit_days": int(daily["assumed_zero"].sum()),
+        "history_complete_declared": args.history_complete,
+        "daily_tolerance_kg": args.daily_tolerance_kg,
+        "period_tolerance_kg": args.period_tolerance_kg,
+        "target_within_tolerance_percent": args.target_within_tolerance_percent,
         "selected_on_development": selection["selectedModel"],
         "versions": {"python": platform.python_version(), "numpy": np.__version__,
                      "pandas": pd.__version__, "xgboost": xgboost.__version__, "matplotlib": matplotlib.__version__},
         "parameters": server._train_model(server._training_frame(development)[0]).get_params(),
     }
+    assessment = vendor_assessment(predictions, totals, metadata)
     predictions.to_csv(output / "predictions.csv", index=False)
     metrics.to_csv(output / "model_metrics.csv", index=False)
     comparison = predictions.pivot(
@@ -487,18 +661,28 @@ def main(argv=None):
     comparison.to_csv(output / "actual_vs_predicted.csv", index=False)
     daily.to_csv(output / "daily_sales.csv", index=False)
     learning.to_csv(output / "learning_curve.csv", index=False)
+    totals.to_csv(output / "period_predictions.csv", index=False)
+    period_metrics.to_csv(output / "period_metrics.csv", index=False)
+    summarize(totals, ["model", "fruit"], args.period_tolerance_kg).rename(
+        columns={"fruit_days": "fruit_periods"}
+    ).to_csv(output / "fruit_period_metrics.csv", index=False)
+    assessment.to_csv(output / "vendor_assessment.csv", index=False)
+    predictions[predictions["model"] == "Selected policy"][[
+        "block", "training_end", "forecast_start", "fruit", "model_used"
+    ]].drop_duplicates().to_csv(output / "selection_history.csv", index=False)
     for filename, columns in [("fruit_metrics.csv", ["model", "fruit"]),
                               ("block_metrics.csv", ["model", "block"]),
                               ("horizon_metrics.csv", ["model", "horizon_day"])]:
-        summarize(predictions, columns).to_csv(output / filename, index=False)
+        summarize(predictions, columns, args.daily_tolerance_kg).to_csv(output / filename, index=False)
     (output / "development_selection.json").write_text(json.dumps(selection, indent=2, allow_nan=False), encoding="utf-8")
     # get_params may contain NaN defaults; retain only explicitly serializable values.
     metadata["parameters"] = {k: v for k, v in metadata["parameters"].items()
                               if v is not None and not (isinstance(v, float) and math.isnan(v))}
     (output / "run_metadata.json").write_text(json.dumps(metadata, indent=2, allow_nan=False), encoding="utf-8")
     print("Generating local PNG and PDF figures...", flush=True)
-    figures = generate_figures(output, transactions, daily, predictions, metrics, learning, provenance)
-    write_report(output, metadata, metrics, figures)
+    figures = generate_figures(output, transactions, daily, predictions, metrics, learning, provenance,
+                               totals, assessment, args.horizon_days)
+    write_report(output, metadata, metrics, figures, period_metrics, assessment)
     print(metrics[["model", "mae_kg", "rmse_kg", "wape_percent"]].to_string(index=False))
     print(f"\n{provenance}\nOpen: {output / 'index.html'}", flush=True)
 

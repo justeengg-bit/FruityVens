@@ -42,7 +42,7 @@ class EvaluationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "No completed transactions"):
                 evaluation.load_sales(source, exclude_generated=True)
 
-    def test_each_block_uses_only_earlier_history_and_keeps_selection_separate(self):
+    def test_each_block_selects_and_trains_on_only_earlier_history(self):
         dates = pd.date_range("2026-01-01", periods=80)
         daily = pd.DataFrame({"fruit": "Apple", "date": dates, "kg_sold": 2.,
                               "avg_unit_price": 100, "revenue_centavos": 200,
@@ -51,7 +51,8 @@ class EvaluationTests(unittest.TestCase):
 
         def selection(history, horizon):
             selection_dates.append(history["date"].max())
-            return {"selectedModel": "Recent average", "candidates": [{"model": "Recent average"}]}
+            return {"selectedModel": "Recent average", "selectedByFruit": {"Apple": "Recent average"},
+                    "candidates": [{"model": "Recent average"}]}
 
         def train(history):
             training_dates.append(history["date"].max())
@@ -65,13 +66,73 @@ class EvaluationTests(unittest.TestCase):
              patch.object(server, "_train_model", side_effect=train), \
              patch.object(server, "_forecast_values", side_effect=predict):
             result, development, chosen = evaluation.backtest(daily, 2, 7)
-        self.assertEqual(len(result), 2 * 7 * 3)
+        self.assertEqual(len(result), 2 * 7 * 4)
         self.assertEqual(chosen["selectedModel"], "Recent average")
-        self.assertEqual(selection_dates, [dates[-16]])
+        self.assertEqual(selection_dates, [dates[-16], dates[-9]])
         self.assertLess(development["date"].max(), result["date"].min())
         self.assertEqual(training_dates, [dates[-16], dates[-9]])
         self.assertTrue(all(origin == start - pd.Timedelta(days=2) for origin, start in forecast_calls))
         self.assertTrue(np.all(result["absolute_error_kg"] == 0))
+        self.assertTrue((result[result["model"] == "Selected policy"]["model_used"] == "Recent average").all())
+
+    def test_period_error_and_daily_error_answer_different_questions(self):
+        rows = pd.DataFrame({"model": "Selected policy", "fruit": "Apple", "block": 1,
+                             "date": pd.date_range("2026-01-01", periods=2),
+                             "actual_kg": [0., 10.], "predicted_kg": [10., 0.]})
+        daily = evaluation.error_metrics(rows, tolerance_kg=1)
+        periods = evaluation.planning_totals(rows, 2)
+        period = evaluation.error_metrics(periods, tolerance_kg=1)
+        self.assertEqual(daily["mae_kg"], 10)
+        self.assertEqual(daily["within_tolerance_percent"], 0)
+        self.assertEqual(daily["underforecast_kg"], 10)
+        self.assertEqual(daily["overforecast_kg"], 10)
+        self.assertEqual(period["mae_kg"], 0)
+        self.assertEqual(period["within_tolerance_percent"], 100)
+
+    def test_vendor_assessment_does_not_certify_generated_or_incomplete_records(self):
+        rows = pd.DataFrame({"model": ["Selected policy", "Recent average"],
+                             "fruit": "Apple", "block": 1, "date": pd.Timestamp("2026-01-01"),
+                             "actual_kg": [2., 2.], "predicted_kg": [2., 3.]})
+        totals = evaluation.planning_totals(rows, 1)
+        metadata = {"daily_tolerance_kg": 0.5, "period_tolerance_kg": None,
+                    "target_within_tolerance_percent": 80, "generated_transactions": 2,
+                    "history_complete_declared": True}
+        result = evaluation.vendor_assessment(rows, totals, metadata).iloc[0]
+        self.assertEqual(result["daily_within_tolerance_percent"], 100)
+        self.assertEqual(result["assessment"], "Sample demonstration only")
+        metadata.update(generated_transactions=0, history_complete_declared=False)
+        result = evaluation.vendor_assessment(rows, totals, metadata).iloc[0]
+        self.assertEqual(result["assessment"], "Confirm complete sales records first")
+        metadata["history_complete_declared"] = True
+        result = evaluation.vendor_assessment(rows, totals, metadata).iloc[0]
+        self.assertEqual(result["assessment"], "Within chosen target on tested records")
+        metadata["daily_tolerance_kg"] = None
+        metadata["target_within_tolerance_percent"] = None
+        result = evaluation.vendor_assessment(rows, totals, metadata).iloc[0]
+        self.assertEqual(result["assessment"], "Tolerance target not specified")
+
+    def test_later_sales_cannot_change_an_earlier_policy_choice_or_prediction(self):
+        dates = pd.date_range("2026-01-01", periods=80)
+        daily = pd.DataFrame({"fruit": "Apple", "date": dates, "kg_sold": 2.,
+                              "avg_unit_price": 100, "revenue_centavos": 200, "transactions": 1})
+
+        def selection(history, horizon):
+            name = "XGBRegressor" if history["kg_sold"].max() > 2 else "Recent average"
+            return {"selectedModel": name, "selectedByFruit": {"Apple": name}, "candidates": [{"model": name}]}
+
+        def predict(history, model, codes, start, horizon, name):
+            return {"Apple": [float(history["kg_sold"].mean())] * horizon}
+
+        changed = daily.copy()
+        changed.loc[changed["date"] >= dates[-14], "kg_sold"] = 100
+        with patch.object(server, "_validate_models", side_effect=selection), \
+             patch.object(server, "_train_model", return_value=object()), \
+             patch.object(server, "_forecast_values", side_effect=predict):
+            before, _, _ = evaluation.backtest(daily, 2, 7)
+            after, _, _ = evaluation.backtest(changed, 2, 7)
+        columns = ["fruit", "date", "model", "model_used", "predicted_kg"]
+        pd.testing.assert_frame_equal(before[before["block"] == 1][columns], after[after["block"] == 1][columns])
+        self.assertEqual(after[(after["block"] == 2) & (after["model"] == "Selected policy")]["model_used"].iloc[0], "XGBRegressor")
 
     def test_generated_prefix_is_preserved_when_reading_csv(self):
         with tempfile.TemporaryDirectory() as folder:

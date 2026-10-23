@@ -107,12 +107,14 @@ class ForecastTests(unittest.TestCase):
         self.assertEqual(
             seen_dates,
             [
+                daily["date"].max() - pd.Timedelta(days=29),
+                daily["date"].max() - pd.Timedelta(days=22),
                 daily["date"].max() - pd.Timedelta(days=15),
                 daily["date"].max() - pd.Timedelta(days=8),
             ],
         )
         self.assertEqual(result["selectedModel"], "Weekly seasonal naive")
-        self.assertEqual(result["evaluatedDays"], 14)
+        self.assertEqual(result["evaluatedDays"], 28)
         self.assertEqual(result["maeKg"], 0)
 
     def test_recursive_forecast_bridges_dates_and_uses_target_calendar(self):
@@ -153,7 +155,7 @@ class ForecastTests(unittest.TestCase):
             ]
         )
         result = server.forecast(
-            server.ForecastRequest(transactions=rows, horizon_days=3), authorization=""
+            server.ForecastRequest(transactions=rows, horizon_days=3, include_generated_sales=True), authorization=""
         )
         self.assertEqual(result["dataCoverage"]["transactionCount"], 45)
         self.assertEqual(result["dataCoverage"]["generatedTransactionCount"], 45)
@@ -165,6 +167,56 @@ class ForecastTests(unittest.TestCase):
         self.assertEqual(len(result["predictions"][0]["dailyPredictions"]), 3)
         self.assertIn("3 days", result["predictions"][0]["reason"])
         self.assertIn("supply", result["predictions"][0]["seasonality"])
+        self.assertEqual(result["predictions"][0]["recommendation"], "Review estimate")
+        self.assertIsNone(result["predictions"][0]["purchaseQuantityKg"])
+
+    def test_small_gram_weights_invalid_numbers_and_naive_business_dates(self):
+        self.assertEqual(server._weight_kg({"weightGrams": 25}), 0.025)
+        self.assertEqual(server._weight_kg({"weightGrams": 50}), 0.05)
+        self.assertEqual(server._weight_kg({"weightKg": 25}), 25)
+        self.assertEqual(server._weight_kg({"weightKg": float("nan"), "weightGrams": 25}), 0.025)
+        for value in [float("nan"), float("inf"), -5, "invalid"]:
+            self.assertEqual(server._weight_kg({"weightKg": value}), 0)
+        rows = server._normalize_transactions(pd.DataFrame([
+            {**sales(1)[0], "soldAt": "2026-01-31T23:30:00"},
+            {**sales(1)[0], "weightKg": "invalid"},
+        ]))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows.iloc[0]["date"].isoformat(), "2026-01-31")
+
+    def test_operational_forecast_excludes_generated_history(self):
+        result = server.forecast(server.ForecastRequest(
+            transactions=[{**r, "generated": True} for r in sales(60)]
+        ), authorization="")
+        self.assertFalse(result["predictions"])
+        self.assertEqual(result["dataCoverage"]["transactionCount"], 0)
+        self.assertEqual(result["dataCoverage"]["excludedGeneratedTransactions"], 60)
+        self.assertIn("generated sample", result["summary"])
+
+    def test_selector_chooses_each_fruit_using_identical_earlier_windows(self):
+        records = sales(60) + [{**r, "fruitName": "Apple"} for r in sales(60)]
+        daily = server._daily_sales_frame(server._normalize_transactions(pd.DataFrame(records)))
+
+        def values(history, model, codes, start, horizon, name):
+            self.assertLess(history["date"].max(), start)
+            return {fruit: [2. if name == ("Recent average" if fruit == "Apple" else "XGBRegressor") else 9.] * horizon
+                    for fruit in codes}
+
+        with patch.object(server, "_train_model", return_value=object()), \
+             patch.object(server, "_forecast_values", side_effect=values):
+            result = server._validate_models(daily, 7, tolerance_kg=0.5)
+        self.assertEqual(result["selectedByFruit"], {"Apple": "Recent average", "Watermelon": "XGBRegressor"})
+        self.assertEqual(result["selectedModel"], "Per-fruit selection")
+        self.assertEqual(result["maeKg"], 0)
+        self.assertEqual(result["withinTolerancePercent"], 100)
+        self.assertTrue(all(row["evaluatedDays"] == 28 for row in result["perFruit"]))
+
+    def test_missing_days_are_explicit_assumptions(self):
+        rows = sales(3)
+        rows.pop(1)
+        daily = server._daily_sales_frame(server._normalize_transactions(pd.DataFrame(rows)))
+        self.assertEqual(daily["assumed_zero"].tolist(), [False, True, False])
+        self.assertEqual(daily["kg_sold"].tolist(), [2, 0, 2])
 
     def test_utc_sale_is_assigned_to_manila_business_day(self):
         rows = server._normalize_transactions(

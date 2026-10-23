@@ -19,6 +19,8 @@ operations.
 For local sales graphs, actual-versus-predicted plots, learning curves, and model
 error tables, see [forecast evaluation](docs/forecast_evaluation.md). These reports
 are generated separately from the app; the bundled example uses generated sales.
+The [vendor evaluation guide](docs/vendor_forecast_evaluation.md) explains how to
+judge daily errors, planning-period totals, and vendor-chosen error tolerances.
 
 ## Tech Stack
 

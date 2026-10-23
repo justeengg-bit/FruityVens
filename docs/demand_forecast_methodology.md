@@ -5,6 +5,10 @@ days. Only completed transactions are targets. Pending worker requests,
 cancelled records, removed records, today's incomplete ledger, and future dates
 are excluded. Business dates use Asia/Manila. The exact forecast dates are
 returned by the server and retained by the app's chart.
+Generated sample transactions are excluded from normal forecasts, including mixed
+histories. `include_generated_sales: true` explicitly enables a labelled demonstration.
+Both gram and kilogram fields use their declared units; invalid/nonfinite weights
+are rejected. Timestamps without offsets use the Manila business timezone.
 
 ## Sales And Calendar Features
 
@@ -21,6 +25,9 @@ that first sale are assumed to have zero recorded sales. This assumes the
 ledger is complete; missing uploads, closures, stockouts, and unrecorded sales
 cannot currently be distinguished. Forecasted sales are not uncensored demand.
 Prices are carried forward unless more recorded prices are available.
+The response counts `assumedZeroFruitDays`, and each fruit counts `assumedZeroDays`.
+`history_complete` defaults to false. Declaring it true requires the data owner to
+verify the ledger; the server cannot infer stockouts or closures from transactions.
 
 If the last closed sales day precedes the forecast origin, the server recursively
 predicts each intervening calendar day before returning the requested horizon.
@@ -56,23 +63,43 @@ what exact official data was available at every past forecast origin.
 ## Model Selection And Confidence
 
 The server compares `XGBRegressor`, weekly seasonal naive, and a recent
-14-day-average forecast using two successive historical windows. Each candidate
+14-day-average forecast using up to four successive historical windows. Each candidate
 trains only on dates before its window and predicts recursively, including the
 same one-day bridge used when today's incomplete sales are excluded. There is
 no random date shuffle or use of held-out sales as recursive inputs.
 
-The lowest mean absolute error (MAE, kg per fruit/day) selects the production
-model. A baseline may win. The response also includes WAPE, evaluated days,
-evaluated fruit-days, and candidate scores. These recent validation windows are
+The lowest mean absolute error (MAE, kg per fruit/day) selects a method separately
+for each fruit. A baseline may win. `selectedByFruit` records the choices; the
+top-level model is `Per-fruit selection` when they differ. The response includes
+per-fruit MAE, WAPE, signed bias, checked days/windows, and candidate scores. An
+optional `acceptable_daily_error_kg` reports the share within that chosen tolerance.
+These recent validation windows are
 used for model selection; they are not an independent test set or evidence of
 performance throughout an entire year. Hyperparameters are conservative defaults,
 not a claim of optimal tuning. Longer operational monitoring remains necessary.
 
-Confidence combines validation error, per-fruit selling-day coverage, and
-freshness. It remains low when generated records are included, history is sparse,
-or validation is unavailable. Generated records remain marked in response
-metadata and can exercise the workflow, but cannot establish real vendor demand
-or real-world forecasting accuracy. PSA observations never enter the sales table.
+Evidence remains `low` for generated records, an unconfirmed ledger, fewer than
+30 selling days for the fruit, fewer than four checked windows, missing validation,
+or sales more than seven days old. Otherwise it is `provisional`. These labels are
+not calibrated probabilities and do not certify performance. The previous universal
+25%/50% WAPE confidence thresholds have been removed. Each fruit carries its own
+evidence and error information. PSA observations never enter the sales table.
+
+Independent evaluation is performed locally by `tool/evaluate_forecast.py`: at
+each later block it runs the selector on earlier history, then scores the selected
+method on that block's sales. It reports both daily and period-total errors and
+compares against recent-average and previous-week baselines. Parameters are not
+tuned against the upcoming test block. See [evaluation instructions](forecast_evaluation.md).
+
+## Sales Guidance And Stock
+
+The current Flutter request supplies a fruit/price catalog and explicitly disables
+stock tracking. No usable remaining kilograms, delivery schedule, or shelf-life
+data is supplied. Consequently, forecasts are expected sales quantities;
+`purchaseQuantityKg` is null. Advice asks the vendor to check usable stock,
+spoilage, and delivery timing before buying. It uses "Review estimate" for low
+evidence, or describes expected sales relative to the recent baseline. Legacy
+heavy/medium/light restock instructions no longer override the server's explanation.
 
 ## AI Advice And Hosting
 

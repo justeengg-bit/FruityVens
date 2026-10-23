@@ -1,0 +1,526 @@
+{
+  "method": "rolling-origin recursive forecast",
+  "evaluationPurpose": "model selection; not an independent accuracy estimate",
+  "horizonDays": 7,
+  "maeKg": 1.3462478273164291,
+  "wapePercent": 64.10098299173171,
+  "biasKg": 0.10617132519535415,
+  "underforecastKg": 156.24963926725545,
+  "overforecastKg": 183.00481321648468,
+  "withinTolerancePercent": null,
+  "acceptableDailyErrorKg": null,
+  "evaluatedDays": 28,
+  "evaluatedWindows": 4,
+  "evaluatedFruitDays": 252,
+  "selectedModel": "Per-fruit selection",
+  "selectedByFruit": {
+    "Apple": "XGBRegressor",
+    "Banana": "Recent average",
+    "Calamansi": "XGBRegressor",
+    "Grapes": "Recent average",
+    "Mango": "XGBRegressor",
+    "Orange": "Recent average",
+    "Papaya": "Recent average",
+    "Pineapple": "XGBRegressor",
+    "Watermelon": "Recent average"
+  },
+  "perFruit": [
+    {
+      "fruit": "Apple",
+      "model": "XGBRegressor",
+      "maeKg": 1.0904678404331207,
+      "wapePercent": 61.373064386185696,
+      "biasKg": 0.22032819049698965,
+      "underforecastKg": 12.181955099105835,
+      "overforecastKg": 18.351144433021545,
+      "withinTolerancePercent": null,
+      "acceptableDailyErrorKg": null,
+      "evaluatedDays": 28,
+      "evaluatedWindows": 4,
+      "candidates": [
+        {
+          "model": "Weekly seasonal naive",
+          "maeKg": 1.2321428571428572,
+          "wapePercent": 69.34673366834171,
+          "biasKg": -0.125,
+          "underforecastKg": 19.0,
+          "overforecastKg": 15.5,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        },
+        {
+          "model": "Recent average",
+          "maeKg": 1.1029727905000226,
+          "wapePercent": 62.07686057085555,
+          "biasKg": -0.002258069859080352,
+          "underforecastKg": 15.473232045027443,
+          "overforecastKg": 15.410006088973192,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        },
+        {
+          "model": "XGBRegressor",
+          "maeKg": 1.0904678404331207,
+          "wapePercent": 61.373064386185696,
+          "biasKg": 0.22032819049698965,
+          "underforecastKg": 12.181955099105835,
+          "overforecastKg": 18.351144433021545,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        }
+      ]
+    },
+    {
+      "fruit": "Banana",
+      "model": "Recent average",
+      "maeKg": 2.1732753895193446,
+      "wapePercent": 53.14559904501455,
+      "biasKg": 0.5307025274182253,
+      "underforecastKg": 22.996020069415664,
+      "overforecastKg": 37.855690837125984,
+      "withinTolerancePercent": null,
+      "acceptableDailyErrorKg": null,
+      "evaluatedDays": 28,
+      "evaluatedWindows": 4,
+      "candidates": [
+        {
+          "model": "Weekly seasonal naive",
+          "maeKg": 2.9107142857142856,
+          "wapePercent": 71.17903930131004,
+          "biasKg": 0.6071428571428571,
+          "underforecastKg": 32.25,
+          "overforecastKg": 49.25,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        },
+        {
+          "model": "Recent average",
+          "maeKg": 2.1732753895193446,
+          "wapePercent": 53.14559904501455,
+          "biasKg": 0.5307025274182253,
+          "underforecastKg": 22.996020069415664,
+          "overforecastKg": 37.855690837125984,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        },
+        {
+          "model": "XGBRegressor",
+          "maeKg": 2.431841573544911,
+          "wapePercent": 59.46861489891485,
+          "biasKg": -0.19007944634982518,
+          "underforecastKg": 36.706894278526306,
+          "overforecastKg": 31.3846697807312,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        }
+      ]
+    },
+    {
+      "fruit": "Calamansi",
+      "model": "XGBRegressor",
+      "maeKg": 0.5776426462190491,
+      "wapePercent": 77.48021122938144,
+      "biasKg": -0.15076866852385656,
+      "underforecastKg": 10.19775840640068,
+      "overforecastKg": 5.9762356877326965,
+      "withinTolerancePercent": null,
+      "acceptableDailyErrorKg": null,
+      "evaluatedDays": 28,
+      "evaluatedWindows": 4,
+      "candidates": [
+        {
+          "model": "Weekly seasonal naive",
+          "maeKg": 0.6875,
+          "wapePercent": 92.21556886227546,
+          "biasKg": -0.20535714285714285,
+          "underforecastKg": 12.5,
+          "overforecastKg": 6.75,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        },
+        {
+          "model": "Recent average",
+          "maeKg": 0.579455617863892,
+          "wapePercent": 77.72338826437833,
+          "biasKg": -0.2237257911899271,
+          "underforecastKg": 11.24453972675347,
+          "overforecastKg": 4.9802175734355085,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        },
+        {
+          "model": "XGBRegressor",
+          "maeKg": 0.5776426462190491,
+          "wapePercent": 77.48021122938144,
+          "biasKg": -0.15076866852385656,
+          "underforecastKg": 10.19775840640068,
+          "overforecastKg": 5.9762356877326965,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        }
+      ]
+    },
+    {
+      "fruit": "Grapes",
+      "model": "Recent average",
+      "maeKg": 0.7555697531000277,
+      "wapePercent": 115.13443856762326,
+      "biasKg": -0.12795816443324307,
+      "underforecastKg": 12.36939084546579,
+      "overforecastKg": 8.786562241334984,
+      "withinTolerancePercent": null,
+      "acceptableDailyErrorKg": null,
+      "evaluatedDays": 28,
+      "evaluatedWindows": 4,
+      "candidates": [
+        {
+          "model": "Weekly seasonal naive",
+          "maeKg": 1.0178571428571428,
+          "wapePercent": 155.10204081632654,
+          "biasKg": -0.08928571428571429,
+          "underforecastKg": 15.5,
+          "overforecastKg": 13.0,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        },
+        {
+          "model": "Recent average",
+          "maeKg": 0.7555697531000277,
+          "wapePercent": 115.13443856762326,
+          "biasKg": -0.12795816443324307,
+          "underforecastKg": 12.36939084546579,
+          "overforecastKg": 8.786562241334984,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        },
+        {
+          "model": "XGBRegressor",
+          "maeKg": 0.8649086941565786,
+          "wapePercent": 131.7956105381453,
+          "biasKg": 0.19375326058694295,
+          "underforecastKg": 9.3961760699749,
+          "overforecastKg": 14.821267366409302,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        }
+      ]
+    },
+    {
+      "fruit": "Mango",
+      "model": "XGBRegressor",
+      "maeKg": 1.1830344242709023,
+      "wapePercent": 51.35653314664383,
+      "biasKg": 0.08678498864173889,
+      "underforecastKg": 15.347492098808289,
+      "overforecastKg": 17.777471780776978,
+      "withinTolerancePercent": null,
+      "acceptableDailyErrorKg": null,
+      "evaluatedDays": 28,
+      "evaluatedWindows": 4,
+      "candidates": [
+        {
+          "model": "Weekly seasonal naive",
+          "maeKg": 1.4017857142857142,
+          "wapePercent": 60.85271317829457,
+          "biasKg": 0.15178571428571427,
+          "underforecastKg": 17.5,
+          "overforecastKg": 21.75,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        },
+        {
+          "model": "Recent average",
+          "maeKg": 1.2314712634661154,
+          "wapePercent": 53.45921763883912,
+          "biasKg": 0.16938650772211522,
+          "underforecastKg": 14.869186580416002,
+          "overforecastKg": 19.61200879663523,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        },
+        {
+          "model": "XGBRegressor",
+          "maeKg": 1.1830344242709023,
+          "wapePercent": 51.35653314664383,
+          "biasKg": 0.08678498864173889,
+          "underforecastKg": 15.347492098808289,
+          "overforecastKg": 17.777471780776978,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        }
+      ]
+    },
+    {
+      "fruit": "Orange",
+      "model": "Recent average",
+      "maeKg": 1.2544727435565637,
+      "wapePercent": 90.64577243763557,
+      "biasKg": -0.046066488454111924,
+      "underforecastKg": 18.207549248149462,
+      "overforecastKg": 16.917687571434328,
+      "withinTolerancePercent": null,
+      "acceptableDailyErrorKg": null,
+      "evaluatedDays": 28,
+      "evaluatedWindows": 4,
+      "candidates": [
+        {
+          "model": "Weekly seasonal naive",
+          "maeKg": 1.2946428571428572,
+          "wapePercent": 93.54838709677419,
+          "biasKg": -0.026785714285714284,
+          "underforecastKg": 18.5,
+          "overforecastKg": 17.75,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        },
+        {
+          "model": "Recent average",
+          "maeKg": 1.2544727435565637,
+          "wapePercent": 90.64577243763557,
+          "biasKg": -0.046066488454111924,
+          "underforecastKg": 18.207549248149462,
+          "overforecastKg": 16.917687571434328,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        },
+        {
+          "model": "XGBRegressor",
+          "maeKg": 1.262393444776535,
+          "wapePercent": 91.21810697740123,
+          "biasKg": -0.090283921786717,
+          "underforecastKg": 18.93748313188553,
+          "overforecastKg": 16.409533321857452,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        }
+      ]
+    },
+    {
+      "fruit": "Papaya",
+      "model": "Recent average",
+      "maeKg": 1.376328162243515,
+      "wapePercent": 68.81640811217575,
+      "biasKg": 0.4228049325053984,
+      "underforecastKg": 13.349325216333629,
+      "overforecastKg": 25.187863326484784,
+      "withinTolerancePercent": null,
+      "acceptableDailyErrorKg": null,
+      "evaluatedDays": 28,
+      "evaluatedWindows": 4,
+      "candidates": [
+        {
+          "model": "Weekly seasonal naive",
+          "maeKg": 1.9285714285714286,
+          "wapePercent": 96.42857142857143,
+          "biasKg": 0.32142857142857145,
+          "underforecastKg": 22.5,
+          "overforecastKg": 31.5,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        },
+        {
+          "model": "Recent average",
+          "maeKg": 1.376328162243515,
+          "wapePercent": 68.81640811217575,
+          "biasKg": 0.4228049325053984,
+          "underforecastKg": 13.349325216333629,
+          "overforecastKg": 25.187863326484784,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        },
+        {
+          "model": "XGBRegressor",
+          "maeKg": 1.6866720574242728,
+          "wapePercent": 84.33360287121364,
+          "biasKg": 0.8542603084019252,
+          "underforecastKg": 11.653764486312866,
+          "overforecastKg": 35.57305312156677,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        }
+      ]
+    },
+    {
+      "fruit": "Pineapple",
+      "model": "XGBRegressor",
+      "maeKg": 1.4924547927720206,
+      "wapePercent": 80.36295038003189,
+      "biasKg": -0.19960428135735647,
+      "underforecastKg": 23.68882703781128,
+      "overforecastKg": 18.099907159805298,
+      "withinTolerancePercent": null,
+      "acceptableDailyErrorKg": null,
+      "evaluatedDays": 28,
+      "evaluatedWindows": 4,
+      "candidates": [
+        {
+          "model": "Weekly seasonal naive",
+          "maeKg": 2.0892857142857144,
+          "wapePercent": 112.5,
+          "biasKg": -0.16071428571428573,
+          "underforecastKg": 31.5,
+          "overforecastKg": 27.0,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        },
+        {
+          "model": "Recent average",
+          "maeKg": 1.5778994681731902,
+          "wapePercent": 84.96381751701793,
+          "biasKg": -0.14648978058889225,
+          "underforecastKg": 24.14144948266916,
+          "overforecastKg": 20.039735626180168,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        },
+        {
+          "model": "XGBRegressor",
+          "maeKg": 1.4924547927720206,
+          "wapePercent": 80.36295038003189,
+          "biasKg": -0.19960428135735647,
+          "underforecastKg": 23.68882703781128,
+          "overforecastKg": 18.099907159805298,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        }
+      ]
+    },
+    {
+      "fruit": "Watermelon",
+      "model": "Recent average",
+      "maeKg": 2.212984693733318,
+      "wapePercent": 54.1166562659676,
+      "biasKg": 0.219318890464403,
+      "underforecastKg": 27.91132124576481,
+      "overforecastKg": 34.0522501787681,
+      "withinTolerancePercent": null,
+      "acceptableDailyErrorKg": null,
+      "evaluatedDays": 28,
+      "evaluatedWindows": 4,
+      "candidates": [
+        {
+          "model": "Weekly seasonal naive",
+          "maeKg": 4.017857142857143,
+          "wapePercent": 98.2532751091703,
+          "biasKg": 0.125,
+          "underforecastKg": 54.5,
+          "overforecastKg": 58.0,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        },
+        {
+          "model": "Recent average",
+          "maeKg": 2.212984693733318,
+          "wapePercent": 54.1166562659676,
+          "biasKg": 0.219318890464403,
+          "underforecastKg": 27.91132124576481,
+          "overforecastKg": 34.0522501787681,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        },
+        {
+          "model": "XGBRegressor",
+          "maeKg": 2.634794690779277,
+          "wapePercent": 64.43166056054127,
+          "biasKg": -0.516645222902298,
+          "underforecastKg": 44.12015879154205,
+          "overforecastKg": 29.65409255027771,
+          "withinTolerancePercent": null,
+          "acceptableDailyErrorKg": null,
+          "evaluatedDays": 28,
+          "evaluatedWindows": 4
+        }
+      ]
+    }
+  ],
+  "candidates": [
+    {
+      "model": "Weekly seasonal naive",
+      "maeKg": 1.8422619047619047,
+      "wapePercent": 87.71846953235712,
+      "biasKg": 0.06646825396825397,
+      "underforecastKg": 223.75,
+      "overforecastKg": 240.5,
+      "withinTolerancePercent": null,
+      "acceptableDailyErrorKg": null,
+      "evaluatedDays": 28,
+      "evaluatedWindows": 4
+    },
+    {
+      "model": "Recent average",
+      "maeKg": 1.3627144313506654,
+      "wapePercent": 64.88503291457113,
+      "biasKg": 0.08841272928720971,
+      "underforecastKg": 160.56201445999542,
+      "overforecastKg": 182.84202224037227,
+      "withinTolerancePercent": null,
+      "acceptableDailyErrorKg": null,
+      "evaluatedDays": 28,
+      "evaluatedWindows": 4
+    },
+    {
+      "model": "XGBRegressor",
+      "maeKg": 1.469356684930741,
+      "wapePercent": 69.96275571139286,
+      "biasKg": 0.023082800800838167,
+      "underforecastKg": 182.23050940036774,
+      "overforecastKg": 188.04737520217896,
+      "withinTolerancePercent": null,
+      "acceptableDailyErrorKg": null,
+      "evaluatedDays": 28,
+      "evaluatedWindows": 4
+    }
+  ]
+}
