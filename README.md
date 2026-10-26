@@ -19,6 +19,9 @@ operations.
 For local sales graphs, actual-versus-predicted plots, learning curves, and model
 error tables, see [forecast evaluation](docs/forecast_evaluation.md). These reports
 are generated separately from the app; the bundled example uses generated sales.
+The current catalog contains 23 specific categories. Mango Carabao, Indian Mango,
+and Apple Mango remain separate; Guava is excluded. Reports show missing history
+explicitly and list generic Mango records for variety review.
 The [vendor evaluation guide](docs/vendor_forecast_evaluation.md) explains how to
 judge daily errors, planning-period totals, and vendor-chosen error tolerances.
 

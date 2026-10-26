@@ -29,6 +29,7 @@ from xgboost import XGBRegressor
 
 from tool.forecast_seasonality import SEASONAL_FEATURES, SeasonalMarketHistory
 from tool.forecast_metrics import error_metrics
+from tool.fruit_categories import FRUIT_CATEGORIES, split_supported_sales
 
 try:
     import firebase_admin
@@ -136,16 +137,29 @@ def forecast(
     generated_count = int(transactions["generated"].sum()) if not transactions.empty else 0
     if not request.include_generated_sales and not transactions.empty:
         transactions = transactions[~transactions["generated"]].copy()
+    transactions, category_issues = split_supported_sales(transactions)
     data_coverage = _data_coverage(transactions)
     data_coverage["excludedGeneratedTransactions"] = (
         generated_count if not request.include_generated_sales else 0
     )
     data_coverage["historyCompleteDeclared"] = request.history_complete
+    data_coverage["supportedCategoryCount"] = len(FRUIT_CATEGORIES)
+    data_coverage["categoriesWithoutHistory"] = [
+        fruit for fruit in FRUIT_CATEGORIES if fruit not in data_coverage["fruits"]
+    ]
+    data_coverage["excludedUnclassifiedTransactions"] = len(category_issues)
+    data_coverage["categoryIssues"] = [
+        {"sourceFruit": str(fruit), "transactionCount": int(len(rows)),
+         "reason": str(rows["category_issue"].iloc[0])}
+        for fruit, rows in category_issues.groupby("fruit")
+    ] if not category_issues.empty else []
     if transactions.empty:
         return _empty_response(
             source="FruityVens seasonal demand forecast",
             model="insufficient-data",
-            message=("Only generated sample sales are available. Record genuine completed sales "
+            message=("Sales need category review. Specify Mango Carabao, Indian Mango, or Apple Mango "
+                     "for mango records; other sales must use a supported category." if len(category_issues) else
+                     "Only generated sample sales are available. Record genuine completed sales "
                      "before using a vendor forecast." if generated_count else
                      "No completed sales before today are available for forecasting yet."),
             data_coverage=data_coverage,

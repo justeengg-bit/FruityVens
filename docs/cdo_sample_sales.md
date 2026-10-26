@@ -6,6 +6,17 @@ The [JSON asset](../assets/data/cdo_sample_sales_2026.json) and [downloadable CS
 
 The scenario totals 1,865.375 kg and PHP 170,338.24. These totals describe generated sample data only.
 
+## Category correction for the current forecast report
+
+This is the preserved legacy nine-name source. The current application and
+forecast report use 23 specific categories, with Guava excluded and the three
+mango varieties kept separate. The original generic Mango labels are not enough
+to identify a variety and have not been silently relabelled. After the October 9
+partial day is excluded, 194 Mango transactions require category review; 1,047
+other transactions are included in the corrected evaluation. See
+[the current report](../reports/forecast_evaluation/revised_sample/README.md).
+The source totals above therefore differ from the category-resolved report totals.
+
 ## Import into normal history
 
 The import completed on the connected phone: 1,249 generated records were added while preserving 139 existing sales, leaving 1,388 records in normal SQLite sales history. Stable `sample_cdo_` cloud IDs identify the generated records and prevent duplicate imports or overwriting matching records. The one-time “Add July–October sales” button has been removed; the imported records remain in History. There is no separate sample mode.

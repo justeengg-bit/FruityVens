@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "categories": [
+    "Apple", "Orange", "Banana", "Grapes", "Lemon", "Papaya",
+    "Watermelon", "Pineapple", "Calamansi", "Pomelo", "Avocado",
+    "Dragon Fruit", "Durian", "Mangosteen", "Rambutan", "Lanzones",
+    "Melon", "Guyabano", "Mango Carabao", "Indian Mango", "Apple Mango",
+    "Pear", "Strawberries"
+  ],
+  "aliases": {
+    "Carabao Mango": "Mango Carabao",
+    "Mango Indian": "Indian Mango",
+    "Grape": "Grapes",
+    "Strawberry": "Strawberries"
+  },
+  "ambiguous_names": ["Mango", "Ripe Mango", "Mango Ripe"],
+  "excluded_categories": ["Guava"]
+}

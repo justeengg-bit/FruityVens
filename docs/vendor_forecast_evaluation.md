@@ -8,6 +8,8 @@ genuine sales records and the vendor's operating conditions.
 ## What changed
 
 - Operational forecasts exclude generated transactions by default.
+- All 23 specific categories are represented. Guava is excluded; generic Mango
+  sales require variety review before forecasting. The three mango varieties stay separate.
 - Explicit grams are always converted to kilograms; naive dates use Manila time.
 - Each fruit chooses among XGBoost, previous-week sales, and the recent average
   using up to four earlier forecast checks. The simplest method can win.
@@ -34,7 +36,8 @@ WAPE is an error, not a classification accuracy percentage. It is undefined for
 all-zero actuals and can be hard to compare across differing periods or sales
 levels. Use it alongside kg errors and baseline comparisons, not alone.
 
-The first four figures explain sales history. The daily actual/predicted plot and
+The category-coverage figure and first four numbered figures explain input coverage
+and sales history. The daily actual/predicted plot and
 error comparison assess forecasting. Period totals help with quantity planning,
 but may hide timing mistakes: predicting 10 kg on the wrong day can produce a
 perfect weekly total and still be unhelpful for perishable stock. The boosting
@@ -74,16 +77,21 @@ It uses generated sample transactions. It demonstrates calculations and exposes
 weaknesses; it does not establish real-world vendor accuracy. No tolerance has
 been chosen, so tolerance-based usefulness remains unassessed.
 
-On the revised sample run (28 test dates, nine fruits, four seven-day blocks):
+The corrected report includes all 23 supported categories. Eight have usable sample
+history; 15 have no category-specific history. The 194 transactions labelled only
+Mango remain in the original source and are listed for variety review, rather than
+being guessed or split among mango varieties.
+
+On the corrected sample run (28 test dates, eight evaluated fruits, four seven-day blocks):
 
 | Method | Daily MAE (kg/fruit/day) | MAE of seven-day totals (kg/fruit/week) |
 | --- | ---: | ---: |
-| Recent average | 1.535 | 5.456 |
-| XGBoost | 1.599 | 5.633 |
-| Per-fruit selected policy | 1.528 | 5.246 |
+| Recent average | 1.514 | 5.354 |
+| XGBoost | 1.579 | 5.646 |
+| Per-fruit selected policy | 1.522 | 5.289 |
 
-The selected procedure improves only slightly over the recent average overall;
-some fruits become worse. Its daily WAPE remains 82.16%. These are sample results,
+The selected procedure has slightly worse daily MAE than the recent average,
+and slightly better error in weekly totals. Its daily WAPE is 85.55%. These are sample results,
 not evidence of reliable vendor forecasting or statistically established superiority.
 
 ## Literature supporting the evaluation approach

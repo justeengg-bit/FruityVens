@@ -1,0 +1,24 @@
+fruit,transaction_count,selling_days,total_kg,first_sale,last_sale,generated_transactions,tested_days,history_status,evaluation_status
+Apple,151,82,184.75,2026-07-01,2026-10-08,151,28,Sales history available,Sample evaluation only
+Orange,117,69,132.25,2026-07-01,2026-10-07,117,28,Sales history available,Sample evaluation only
+Banana,290,93,450.5,2026-07-01,2026-10-08,290,28,Sales history available,Sample evaluation only
+Grapes,71,48,48.75,2026-07-01,2026-10-08,71,28,Sales history available,Sample evaluation only
+Lemon,0,0,,,,0,0,No recorded sales history,Not evaluated: no history
+Papaya,111,69,188.0,2026-07-01,2026-10-05,111,28,Sales history available,Sample evaluation only
+Watermelon,104,68,364.5,2026-07-01,2026-10-08,104,28,Sales history available,Sample evaluation only
+Pineapple,98,65,164.0,2026-07-01,2026-10-07,98,28,Sales history available,Sample evaluation only
+Calamansi,105,63,59.375,2026-07-04,2026-10-07,105,28,Sales history available,Sample evaluation only
+Pomelo,0,0,,,,0,0,No recorded sales history,Not evaluated: no history
+Avocado,0,0,,,,0,0,No recorded sales history,Not evaluated: no history
+Dragon Fruit,0,0,,,,0,0,No recorded sales history,Not evaluated: no history
+Durian,0,0,,,,0,0,No recorded sales history,Not evaluated: no history
+Mangosteen,0,0,,,,0,0,No recorded sales history,Not evaluated: no history
+Rambutan,0,0,,,,0,0,No recorded sales history,Not evaluated: no history
+Lanzones,0,0,,,,0,0,No recorded sales history,Not evaluated: no history
+Melon,0,0,,,,0,0,No recorded sales history,Not evaluated: no history
+Guyabano,0,0,,,,0,0,No recorded sales history,Not evaluated: no history
+Mango Carabao,0,0,,,,0,0,No recorded sales history,Not evaluated: no history
+Indian Mango,0,0,,,,0,0,No recorded sales history,Not evaluated: no history
+Apple Mango,0,0,,,,0,0,No recorded sales history,Not evaluated: no history
+Pear,0,0,,,,0,0,No recorded sales history,Not evaluated: no history
+Strawberries,0,0,,,,0,0,No recorded sales history,Not evaluated: no history

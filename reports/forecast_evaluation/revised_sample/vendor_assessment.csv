@@ -1,10 +1,24 @@
-fruit,daily_mae_kg,daily_wape_percent,daily_bias_kg,daily_underforecast_kg,daily_overforecast_kg,period_mae_kg,period_wape_percent,daily_within_tolerance_percent,period_within_tolerance_percent,daily_tolerance_kg,period_tolerance_kg,improvement_vs_recent_average_percent,tested_days,tested_periods,assessment
-Apple,1.3558623893380901,64.89597760934448,-0.4437366039377504,25.19438590586177,12.769760995604758,5.03458642718736,34.42452257905887,,,,,-5.026743404036282,28,4,Sample demonstration only
-Banana,2.2455269167522736,58.21736450839228,0.2284487342821943,28.23909455458111,34.63565911448255,6.985118378090209,25.870808807741515,,,,,0.0,28,4,Sample demonstration only
-Calamansi,0.6209408782588313,102.27261524263102,0.07839176791377504,7.595687544830789,9.79065704641649,1.767962781124248,41.59912426174701,,,,,-2.466100690711359,28,4,Sample demonstration only
-Grapes,0.5899368317008017,111.98800872964372,0.13339640879228556,6.391565920719227,10.126665366903223,1.2050405235048716,32.67906504419991,,,,,0.0,28,4,Sample demonstration only
-Mango,1.6524584676538194,65.86311330150455,-0.8184932938643864,34.59332466125488,11.675512433052063,5.729453057050705,32.623220253669494,,,,,2.6936348561836687,28,4,Sample demonstration only
-Orange,1.0561824902622514,100.2478295842137,-0.05473350045244253,15.552823870005716,14.020285857337324,3.835633256908364,52.0085865343507,,,,,0.0,28,4,Sample demonstration only
-Papaya,1.3937504858623624,88.69321273669578,-0.024188562411659502,19.851146675836304,19.173866928309838,4.022120604350451,36.564732766822274,,,,,0.0,28,4,Sample demonstration only
-Pineapple,1.6153455904181109,92.7788236547838,-0.10045884876033959,24.021262148498305,21.2084143832088,2.4551198263969924,20.144572934539426,,,,,5.441220869362063,28,4,Sample demonstration only
-Watermelon,3.224500033855594,115.75128326661105,0.2538463032551447,41.58915222840628,48.69684871955033,16.181052776251242,82.97975782692944,,,,,0.0,28,4,Sample demonstration only
+fruit,history_status,evaluation_status,daily_mae_kg,daily_wape_percent,daily_bias_kg,daily_underforecast_kg,daily_overforecast_kg,period_mae_kg,period_wape_percent,daily_within_tolerance_percent,period_within_tolerance_percent,daily_tolerance_kg,period_tolerance_kg,improvement_vs_recent_average_percent,tested_days,tested_periods,assessment
+Apple,Sales history available,Sample evaluation only,1.4299993362206105,68.444412673807,-0.3701155097109132,25.201607843041334,14.838373571135763,6.048203942751325,41.355240634197095,,,,,-10.769481131860047,28.0,4.0,Sample demonstration only
+Orange,Sales history available,Sample evaluation only,1.0647848415125325,101.06432394017257,-0.02894319261945777,15.312192477847866,14.501783084503048,4.016165411739257,54.456480159176365,,,,,-0.8144758438615174,28.0,4.0,Sample demonstration only
+Banana,Sales history available,Sample evaluation only,2.2455269167522736,58.21736450839228,0.2284487342821943,28.23909455458111,34.63565911448255,6.985118378090209,25.870808807741515,,,,,0.0,28.0,4.0,Sample demonstration only
+Grapes,Sales history available,Sample evaluation only,0.5899368317008017,111.98800872964372,0.13339640879228556,6.391565920719227,10.126665366903223,1.2050405235048716,32.67906504419991,,,,,0.0,28.0,4.0,Sample demonstration only
+Lemon,No recorded sales history,Not evaluated: no history,,,,,,,,,,,,,,,Not evaluated: no history
+Papaya,Sales history available,Sample evaluation only,1.3937504858623624,88.69321273669578,-0.024188562411659502,19.851146675836304,19.173866928309838,4.022120604350451,36.564732766822274,,,,,0.0,28.0,4.0,Sample demonstration only
+Watermelon,Sales history available,Sample evaluation only,3.224500033855594,115.75128326661105,0.2538463032551447,41.58915222840628,48.69684871955033,16.181052776251242,82.97975782692944,,,,,0.0,28.0,4.0,Sample demonstration only
+Pineapple,Sales history available,Sample evaluation only,1.6211791925444852,93.11388182819607,-0.17446319783850983,25.13899346536193,20.254023925883654,2.0109466480798655,16.500075061168126,,,,,5.099734627485441,28.0,4.0,Sample demonstration only
+Calamansi,Sales history available,Sample evaluation only,0.6059963969284917,99.81117125881039,0.08938432869263661,7.2325689553019705,9.735330158695797,1.844910706576279,43.409663684147745,,,,,0.0,28.0,4.0,Sample demonstration only
+Pomelo,No recorded sales history,Not evaluated: no history,,,,,,,,,,,,,,,Not evaluated: no history
+Avocado,No recorded sales history,Not evaluated: no history,,,,,,,,,,,,,,,Not evaluated: no history
+Dragon Fruit,No recorded sales history,Not evaluated: no history,,,,,,,,,,,,,,,Not evaluated: no history
+Durian,No recorded sales history,Not evaluated: no history,,,,,,,,,,,,,,,Not evaluated: no history
+Mangosteen,No recorded sales history,Not evaluated: no history,,,,,,,,,,,,,,,Not evaluated: no history
+Rambutan,No recorded sales history,Not evaluated: no history,,,,,,,,,,,,,,,Not evaluated: no history
+Lanzones,No recorded sales history,Not evaluated: no history,,,,,,,,,,,,,,,Not evaluated: no history
+Melon,No recorded sales history,Not evaluated: no history,,,,,,,,,,,,,,,Not evaluated: no history
+Guyabano,No recorded sales history,Not evaluated: no history,,,,,,,,,,,,,,,Not evaluated: no history
+Mango Carabao,No recorded sales history,Not evaluated: no history,,,,,,,,,,,,,,,Not evaluated: no history
+Indian Mango,No recorded sales history,Not evaluated: no history,,,,,,,,,,,,,,,Not evaluated: no history
+Apple Mango,No recorded sales history,Not evaluated: no history,,,,,,,,,,,,,,,Not evaluated: no history
+Pear,No recorded sales history,Not evaluated: no history,,,,,,,,,,,,,,,Not evaluated: no history
+Strawberries,No recorded sales history,Not evaluated: no history,,,,,,,,,,,,,,,Not evaluated: no history

@@ -1,0 +1,19 @@
+{
+  "completed_closed_day_input": {
+    "transactions": 1241,
+    "kilograms": 1851.875,
+    "revenue_centavos": 16901242
+  },
+  "included_in_analysis": {
+    "transactions": 1047,
+    "kilograms": 1592.125,
+    "revenue_centavos": 13133861
+  },
+  "excluded_for_category_review": {
+    "transactions": 194,
+    "kilograms": 259.75,
+    "revenue_centavos": 3767381
+  },
+  "scope": "After status, date, weight, and optional generated-record filters; before category resolution",
+  "original_input_modified": false
+}

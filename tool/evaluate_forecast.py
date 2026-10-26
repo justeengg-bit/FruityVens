@@ -14,6 +14,7 @@ import html
 import json
 import math
 import platform
+import textwrap
 from datetime import datetime
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 from tool import forecast_server as server
 from tool.forecast_metrics import error_metrics
+from tool.fruit_categories import CATEGORY_PATH, FRUIT_CATEGORIES, category_coverage, split_supported_sales
 
 ROOT = Path(__file__).resolve().parents[1]
 MODELS = [*server.CANDIDATE_MODELS, "Selected policy"]
@@ -235,7 +237,14 @@ class Figures:
     def save(self, fig, stem, title, caption):
         fig.suptitle(title, fontsize=17, fontweight="bold", x=0.06, ha="left")
         fig.text(0.06, 0.018, self.provenance, fontsize=8, color="#6c4850")
-        fig.tight_layout(rect=(0.025, 0.055, 0.985, 0.93))
+        wrapped = textwrap.fill(caption, width=int(fig.get_figwidth() * 12))
+        lines = len(wrapped.splitlines())
+        footer_top = 0.035 + (0.13 * lines + 0.1) / fig.get_figheight()
+        fig.text(0.06, 0.035, wrapped, fontsize=8, va="bottom", color="#43515e")
+        for legend in fig.legends:
+            legend.set_bbox_to_anchor((0.5, footer_top + 0.005))
+        bottom = footer_top + (0.05 if fig.legends else 0.025)
+        fig.tight_layout(rect=(0.025, bottom, 0.985, 0.93))
         fig.savefig(self.output / f"{stem}.png", dpi=300)
         fig.savefig(self.output / f"{stem}.pdf")
         self.pdf.savefig(fig)
@@ -249,7 +258,45 @@ def date_axis(ax):
     ax.set_xlabel("Date")
 
 
-def generate_figures(output, transactions, daily, predictions, metrics, learning, provenance, periods, assessment, horizon):
+def missing_panel(ax, message="No recorded sales history"):
+    ax.text(0.5, 0.5, message, ha="center", va="center", transform=ax.transAxes,
+            fontsize=10, color="#776970", wrap=True)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.grid(False)
+    ax.set_facecolor("#faf8f8")
+
+
+def add_figure_legend(fig, axes, columns):
+    entries = {}
+    for ax in axes.flat:
+        handles, labels = ax.get_legend_handles_labels()
+        entries.update(zip(labels, handles))
+    if entries:
+        fig.legend(list(entries.values()), list(entries), loc="lower center", ncol=columns,
+                   frameon=False, fontsize=9)
+
+
+def fruit_error_figure(assessment, fruit_order, horizon):
+    fig, axes = plt.subplots(1, 2, figsize=(14, 10))
+    ordered = assessment.set_index("fruit").reindex(fruit_order).reset_index()
+    for ax, column, title, unit in [
+        (axes[0], "daily_mae_kg", "Daily error", "MAE (kg per fruit/day)"),
+        (axes[1], "period_mae_kg", "Period-total error", f"MAE (kg per fruit/{horizon}-day period)"),
+    ]:
+        ax.barh(ordered["fruit"], ordered[column], color=COLORS["Selected policy"])
+        ax.set(xlabel=unit, title=title)
+        # NaN bars do not extend automatic limits. All categories need visible rows.
+        ax.set_yticks(range(len(ordered)), ordered["fruit"])
+        ax.set_ylim(len(ordered) - 0.5, -0.5)
+        for index, value in enumerate(ordered[column]):
+            if pd.isna(value):
+                ax.text(0.01, index, "Not evaluated — no usable history", va="center",
+                        transform=ax.get_yaxis_transform(), fontsize=8, color="#776970")
+    return fig
+
+
+def generate_figures(output, transactions, daily, predictions, metrics, learning, provenance, periods, assessment, horizon, coverage, issues):
     plt.rcParams.update({
         "font.family": "DejaVu Sans", "font.size": 10,
         "axes.spines.top": False, "axes.spines.right": False,
@@ -258,6 +305,18 @@ def generate_figures(output, transactions, daily, predictions, metrics, learning
     })
     with PdfPages(output / "all_figures.pdf") as pdf:
         figures = Figures(output, pdf, provenance)
+        reference_label = "Sample reference sales" if transactions["generated"].any() else "Recorded sales"
+        fig, ax = plt.subplots(figsize=(12, 9))
+        ax.barh(coverage["fruit"], coverage["transaction_count"], color="#456cc4")
+        ax.invert_yaxis()
+        limit = max(1, coverage["transaction_count"].max())
+        ax.set_xlim(0, limit * 1.65)
+        for index, row in enumerate(coverage.itertuples()):
+            label = f"{row.transaction_count} transactions" if row.transaction_count else "No recorded sales history"
+            ax.text(row.transaction_count + limit * 0.015, index, label, va="center", fontsize=9)
+        ax.set_xlabel("Completed input transactions assigned to this category")
+        figures.save(fig, "00_category_coverage", f"Sales-history coverage: all {len(FRUIT_CATEGORIES)} categories",
+                     f"Counts describe the input file, not demand. {len(issues)} transactions need category review and are excluded from these category-specific analyses. No missing fruit history is filled with invented sales.")
         totals = daily.groupby("date")[["kg_sold", "revenue_centavos"]].sum()
         fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
         for ax, column, divisor, unit in [
@@ -265,7 +324,7 @@ def generate_figures(output, transactions, daily, predictions, metrics, learning
             (axes[1], "revenue_centavos", 100, "Revenue (PHP)"),
         ]:
             values = totals[column] / divisor
-            ax.plot(totals.index, values, lw=1.1, color="#7c99cb", label="Daily recorded total")
+            ax.plot(totals.index, values, lw=1.1, color="#7c99cb", label="Daily classified-sales total")
             ax.plot(totals.index, values.rolling(7, min_periods=7).mean(),
                     lw=2.4, color="#284c86", label="7-day trailing average")
             ax.set_ylabel(unit)
@@ -273,19 +332,30 @@ def generate_figures(output, transactions, daily, predictions, metrics, learning
             ax.legend(loc="upper left", frameon=False)
         date_axis(axes[1])
         figures.save(fig, "01_daily_sales", "Daily sales and revenue",
-                     "Completed transactions only. Weight and revenue are separate measures; the trailing average summarizes past sales.")
+                     f"Completed sales assigned to supported categories only; {len(issues)} unresolved/out-of-scope transactions are excluded. Weight and revenue are separate measures; the trailing average summarizes past sales.")
 
-        fruit_order = daily.groupby("fruit")["kg_sold"].sum().sort_values(ascending=False).index.tolist()
-        fig, ax = plt.subplots(figsize=(12, 6))
-        for fruit in fruit_order:
+        fruit_order = list(FRUIT_CATEGORIES)
+        columns, rows = 3, math.ceil(len(fruit_order) / 3)
+        fig, axes = plt.subplots(rows, columns, figsize=(14, 2.7 * rows), squeeze=False)
+        for ax, fruit in zip(axes.flat, fruit_order):
             data = daily[daily["fruit"] == fruit]
-            ax.plot(data["date"], data["kg_sold"].rolling(7, min_periods=7).mean(), lw=1.5, label=fruit)
-        ax.set_ylabel("Kilograms sold per day (7-day average)")
-        ax.set_ylim(bottom=0)
-        date_axis(ax)
-        ax.legend(ncol=3, loc="upper left", frameon=False, fontsize=9)
-        figures.save(fig, "02_fruit_trends", "Sales trends by fruit",
-                     "Each line is a seven-day trailing average, not a fitted forecast or proof of annual seasonality.")
+            ax.set_title(fruit, fontweight="bold")
+            if data.empty:
+                missing_panel(ax)
+                continue
+            average = data["kg_sold"].rolling(7, min_periods=7).mean()
+            if not average.notna().any():
+                missing_panel(ax, "Fewer than 7 daily observations\nTrend not estimated")
+                continue
+            ax.plot(data["date"], average, lw=1.6, color="#456cc4")
+            ax.set_ylabel("kg/day (7-day mean)")
+            ax.set_ylim(bottom=0)
+            date_axis(ax)
+            ax.tick_params(axis="both", labelsize=8)
+        for ax in list(axes.flat)[len(fruit_order):]:
+            ax.set_visible(False)
+        figures.save(fig, "02_fruit_trends", f"Sales trends: all {len(fruit_order)} supported categories",
+                     "Each available line is a seven-day trailing average of classified sales. Empty panels mean no recorded history, not zero demand. Generic Mango records cannot be assigned to a variety without confirmation. Panels have separate kg scales.")
 
         fig, axes = plt.subplots(1, 2, figsize=(12, 5.5))
         axes[0].hist(daily["kg_sold"], bins=25, color="#456cc4", edgecolor="white")
@@ -306,7 +376,7 @@ def generate_figures(output, transactions, daily, predictions, metrics, learning
                color=["#456cc4"] * 5 + ["#208570"] * 2)
         ax.set(xlabel="Day of week", ylabel="Average total kilograms sold per day")
         figures.save(fig, "04_weekday_sales", "Average sales by day of week",
-                     "An exploratory summary of the available period; differences do not establish a causal weekday effect.")
+                     "Summary of classified sales in the available period. For the bundled sample, higher weekend transaction counts were deliberately programmed; this is not evidence of real vendor weekday demand.")
 
         fig, axes = plt.subplots(1, 2, figsize=(12, 5.5))
         labels = [MODEL_LABELS[name] for name in metrics["model"]]
@@ -317,7 +387,8 @@ def generate_figures(output, transactions, daily, predictions, metrics, learning
             ax.set_ylabel(label)
             ax.set_title("Lower error is better")
             ax.set_ylim(0, max(1.0, values.fillna(0).max()) * 1.23)
-            ax.bar_label(bars, labels=[f"{v:.2f}" if pd.notna(v) else "Undefined" for v in values], padding=5, fontsize=10)
+            digits = 3 if column == "mae_kg" else 2
+            ax.bar_label(bars, labels=[f"{v:.{digits}f}" if pd.notna(v) else "Undefined" for v in values], padding=5, fontsize=10)
             ax.tick_params(axis="x", labelsize=9)
         figures.save(fig, "05_model_comparison", "Forecast errors on later test periods",
                      f"All methods predict the same fruit-days over {horizon}-day blocks. Selected policy chooses a method per fruit using earlier sales only. Scores use unrounded predictions.")
@@ -327,7 +398,12 @@ def generate_figures(output, transactions, daily, predictions, metrics, learning
         fig, axes = plt.subplots(rows, columns, figsize=(14, 3.2 * rows), squeeze=False)
         for ax, fruit in zip(axes.flat, fruit_order):
             sample = predictions[(predictions["fruit"] == fruit) & (predictions["model"] == MODELS[2])].sort_values("date")
-            ax.plot(sample["date"], sample["actual_kg"], color="#293642", lw=1.7, marker="o", ms=2.5, label="Actual recorded sales")
+            ax.set_title(fruit, fontweight="bold")
+            if sample.empty:
+                status = coverage.set_index("fruit").loc[fruit, "evaluation_status"]
+                missing_panel(ax, status.replace(": ", ":\n"))
+                continue
+            ax.plot(sample["date"], sample["actual_kg"], color="#293642", lw=1.7, marker="o", ms=2.5, label=reference_label)
             for name in MODELS:
                 part = predictions[(predictions["fruit"] == fruit) & (predictions["model"] == name)].sort_values("date")
                 ax.plot(part["date"], part["predicted_kg"], color=COLORS[name], lw=1.25, ls="--", label=MODEL_LABELS[name])
@@ -339,8 +415,7 @@ def generate_figures(output, transactions, daily, predictions, metrics, learning
             date_axis(ax)
         for ax in list(axes.flat)[len(fruit_order):]:
             ax.set_visible(False)
-        handles, labels = axes.flat[0].get_legend_handles_labels()
-        fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 0.045), ncol=5, frameon=False, fontsize=9)
+        add_figure_legend(fig, axes, 5)
         figures.save(fig, "06_actual_vs_predicted", "Actual versus predicted sales by fruit",
                      f"Dotted boundaries mark new {horizon}-day forecast blocks. Selection and training use only earlier sales; actual sales within a block never become forecast inputs. Reference actuals are sample values when the dataset is generated.")
 
@@ -352,43 +427,43 @@ def generate_figures(output, transactions, daily, predictions, metrics, learning
         figures.save(fig, "07_learning_curve", "Training and validation MAE versus boosting rounds",
                      "One-day-ahead diagnostic: validation features use earlier observed sales. This is not the recursive seven-day test score; the final test period is excluded entirely.")
 
-        xgb = predictions[predictions["model"] == MODELS[2]]
+        selected = predictions[predictions["model"] == "Selected policy"]
         fig, axes = plt.subplots(1, 2, figsize=(12, 5.5))
-        axes[0].scatter(xgb["actual_kg"], xgb["predicted_kg"], alpha=0.55, color=COLORS[MODELS[2]], s=20)
-        limit = max(xgb["actual_kg"].max(), xgb["predicted_kg"].max()) * 1.05
+        axes[0].scatter(selected["actual_kg"], selected["predicted_kg"], alpha=0.55, color=COLORS["Selected policy"], s=20)
+        limit = max(1.0, selected["actual_kg"].max(), selected["predicted_kg"].max()) * 1.05
         axes[0].plot([0, limit], [0, limit], color="#293642", ls="--", label="Perfect agreement")
-        axes[0].set(xlabel="Actual kilograms per fruit/day", ylabel="Predicted kilograms per fruit/day", xlim=(0, limit), ylim=(0, limit), title="XGBoost: predicted versus actual")
+        axes[0].set(xlabel="Reference kilograms per fruit/day", ylabel="Predicted kilograms per fruit/day", xlim=(0, limit), ylim=(0, limit), title="Selected procedure: prediction agreement")
         axes[0].legend(frameon=False)
-        axes[1].hist(xgb["error_kg"], bins=25, color=COLORS[MODELS[2]], edgecolor="white")
+        axes[1].hist(selected["error_kg"], bins=25, color=COLORS["Selected policy"], edgecolor="white")
         axes[1].axvline(0, color="#293642", ls="--")
         axes[1].set(xlabel="Prediction minus actual (kg)", ylabel="Number of fruit-days", title="Negative: underforecast / positive: overforecast")
-        figures.save(fig, "08_prediction_errors", "XGBoost agreement and error distribution",
-                     "A point near the diagonal indicates close agreement. Signed errors show the direction of misses; opposite errors do not cancel in MAE or WAPE.")
+        figures.save(fig, "08_prediction_errors", "Selected procedure: agreement and error distribution",
+                     "Only category-resolved fruit-days with evaluated predictions are shown. A point near the diagonal indicates close agreement; positive error means overforecasting. Sample reference quantities are generated when the input is synthetic.")
 
         fig, axes = plt.subplots(rows, columns, figsize=(14, 3.2 * rows), squeeze=False)
         for ax, fruit in zip(axes.flat, fruit_order):
             observed = periods[(periods["fruit"] == fruit) & (periods["model"] == "Selected policy")].sort_values("block")
-            ax.plot(observed["block"], observed["actual_kg"], "o-", color="#293642", label="Actual period sales")
+            ax.set_title(fruit, fontweight="bold")
+            if observed.empty:
+                missing_panel(ax, coverage.set_index("fruit").loc[fruit, "evaluation_status"].replace(": ", ":\n"))
+                continue
+            ax.plot(observed["date"], observed["actual_kg"], "o-", color="#293642", label=reference_label)
             for name in ["Recent average", "Selected policy"]:
                 part = periods[(periods["fruit"] == fruit) & (periods["model"] == name)].sort_values("block")
-                ax.plot(part["block"], part["predicted_kg"], "o--", color=COLORS[name], label=MODEL_LABELS[name])
-            ax.set(title=fruit, xlabel="Forecast block", ylabel=f"kg / {horizon}-day period", ylim=(0, None))
-            ax.set_xticks(observed["block"])
+                ax.plot(part["date"], part["predicted_kg"], "o--", color=COLORS[name], label=MODEL_LABELS[name])
+            ax.set(ylabel=f"kg / {horizon}-day period", ylim=(0, None))
+            date_axis(ax)
+            ax.set_xlabel("Forecast period starts")
+            ax.tick_params(axis="both", labelsize=8)
         for ax in list(axes.flat)[len(fruit_order):]:
             ax.set_visible(False)
-        handles, labels = axes.flat[0].get_legend_handles_labels()
-        fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 0.045), ncol=3, frameon=False)
+        add_figure_legend(fig, axes, 3)
         figures.save(fig, "09_period_sales", f"Actual and predicted {horizon}-day sales totals",
                      "Totals are calculated separately for each fruit and forecast block. Good agreement here can hide errors in daily timing; read alongside the daily plots. These are sales quantities, not recommended purchase quantities.")
 
-        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-        ordered = assessment.sort_values("daily_mae_kg")
-        axes[0].barh(ordered["fruit"], ordered["daily_mae_kg"], color=COLORS["Selected policy"])
-        axes[1].barh(ordered["fruit"], ordered["period_mae_kg"], color=COLORS["Selected policy"])
-        axes[0].set(xlabel="MAE (kg per fruit/day)", title="Daily error")
-        axes[1].set(xlabel=f"MAE (kg per fruit/{horizon}-day period)", title="Period-total error")
+        fig = fruit_error_figure(assessment, fruit_order, horizon)
         figures.save(fig, "10_fruit_errors", "Selected forecasting policy: errors by fruit",
-                     "Each bar measures later errors after choosing the method on earlier history. Lower is better; an acceptable error depends on the vendor's quantities, replenishment timing, and costs.")
+                     "All supported categories are listed. Missing bars mean not evaluated; they do not represent zero error. Compare kg errors with sales volume and the vendor's tolerance before judging usefulness.")
 
         fig, ax = plt.subplots(figsize=(12, 5.5))
         for name in MODELS:
@@ -398,7 +473,7 @@ def generate_figures(output, transactions, daily, predictions, metrics, learning
         ax.set_xticks(range(1, horizon + 1))
         ax.legend(frameon=False)
         figures.save(fig, "11_horizon_errors", "Forecast error by distance into the future",
-                     "Compare the requested forecast days on the same test blocks. A predicted bridge day precedes day 1 because the current day's ledger is incomplete. A longer horizon need not have monotonically increasing errors.")
+                     "Compare requested days on the same test blocks. Weekly-spaced origins start on the same weekday, so this plot mixes forecast-distance and weekday effects. It does not isolate the causal effect of predicting further ahead. A bridge precedes requested day 1.")
     return figures.items
 
 
@@ -406,7 +481,7 @@ def display(value, digits=2, suffix=""):
     return "Not assessed" if value is None or pd.isna(value) else f"{value:.{digits}f}{suffix}"
 
 
-def write_report(output, metadata, metrics, figures, period_metrics, assessment):
+def write_report(output, metadata, metrics, figures, period_metrics, assessment, coverage, issues):
     score_rows = "\n".join(
         f"| {row.model} | {row.mae_kg:.3f} | {row.rmse_kg:.3f} | {display(row.wape_percent, suffix='%')} | {row.bias_kg:+.3f} |"
         for row in metrics.itertuples()
@@ -416,9 +491,17 @@ def write_report(output, metadata, metrics, figures, period_metrics, assessment)
         for r in period_metrics.itertuples()
     )
     fruit_score_rows = "\n".join(
-        f"| {r.fruit} | {r.daily_mae_kg:.3f} | {r.period_mae_kg:.3f} | {display(r.improvement_vs_recent_average_percent, suffix='%')} | {display(r.daily_within_tolerance_percent, suffix='%')} | {display(r.period_within_tolerance_percent, suffix='%')} | {r.assessment} |"
+        f"| {r.fruit} | {display(r.daily_mae_kg, 3)} | {display(r.period_mae_kg, 3)} | {display(r.improvement_vs_recent_average_percent, suffix='%')} | {display(r.daily_within_tolerance_percent, suffix='%')} | {display(r.period_within_tolerance_percent, suffix='%')} | {r.assessment} |"
         for r in assessment.itertuples()
     )
+    coverage_rows = "\n".join(
+        f"| {r.fruit} | {r.transaction_count} | {r.selling_days} | {r.history_status} | {r.evaluation_status} |"
+        for r in coverage.itertuples()
+    )
+    issue_rows = "\n".join(
+        f"| {name} | {len(group)} | {group['weight_kg'].sum():.3f} | {group['category_issue'].iloc[0]} |"
+        for name, group in issues.groupby("fruit")
+    ) or "| None | 0 | 0 | No category issues |"
     captions = "\n\n".join(
         f"### {item['title']}\n\n![{item['title']}]({item['stem']}.png)\n\n{item['caption']}\n\n[PDF]({item['stem']}.pdf)"
         for item in figures
@@ -430,6 +513,27 @@ def write_report(output, metadata, metrics, figures, period_metrics, assessment)
 Input: `{metadata['input']}`. Closed sales dates: {metadata['sales_start']} through {metadata['sales_end']}.
 Transactions: {metadata['transaction_count']:,}; generated: {metadata['generated_transactions']:,}.
 Partial day excluded: {metadata['excluded_partial_day'] or 'none declared'}.
+
+## Supported categories and input audit
+
+The agreed catalog contains **{metadata['category_count']} specific categories**. Guava and generic
+Mango are not supported categories. Mango Carabao, Indian Mango, and Apple Mango are separate.
+This source file contains {metadata['source_transaction_count']} completed closed-day transactions:
+**{metadata['transaction_count']}** can be assigned to supported categories;
+**{metadata['category_issue_count']}** need category review and are excluded from the sales plots,
+training, and accuracy calculations below. The original input records have not been relabelled.
+
+| Original label needing review | Transactions | Kilograms | Reason |
+| --- | ---: | ---: | --- |
+{issue_rows}
+
+**{metadata['fruit_count']} of {metadata['category_count']} categories have usable sales history**.
+Every category appears below and in the trend/comparison panels. Missing history means unknown;
+it is never represented by invented zero-demand lines or zero prediction errors.
+
+| Supported category | Input transactions | Selling days | Sales-history status | Evaluation status |
+| --- | ---: | ---: | --- | --- |
+{coverage_rows}
 
 ## Chronological test design
 
@@ -518,6 +622,9 @@ real-world vendor performance. No phone, Firebase, or hosted-service records wer
 - `vendor_assessment.csv`: per-fruit baseline comparison and chosen tolerance checks.
 - `selection_history.csv`: the method chosen before each fruit's test block.
 - `daily_sales.csv`: daily kilograms, revenue in centavos, transaction counts, and price per fruit.
+- `category_coverage.csv`: every supported category and its history/evaluation status.
+- `category_review.csv`: completed records requiring a specific supported fruit label.
+- `input_reconciliation.json`: original, included, and excluded transaction/weight/revenue totals.
 - `learning_curve.csv`: training and development-validation MAE by boosting round.
 - `development_selection.json`: initial per-fruit choices using earlier validation records.
 - `run_metadata.json`: source hashes, dates, parameters, and library versions.
@@ -541,6 +648,10 @@ real-world vendor performance. No phone, Firebase, or hosted-service records wer
         "daily_within_tolerance_percent": "Days within tolerance (%)",
         "period_within_tolerance_percent": "Periods within tolerance (%)", "assessment": "Evidence status",
     }).to_html(index=False, float_format=lambda v: f"{v:.2f}", na_rep="Not assessed", border=0)
+    coverage_table = coverage[["fruit", "transaction_count", "selling_days", "history_status", "evaluation_status"]].to_html(index=False, border=0)
+    issues_table = issues.groupby(["fruit", "category_issue"], as_index=False).agg(
+        transaction_count=("fruit", "size"), kilograms=("weight_kg", "sum")
+    ).to_html(index=False, float_format=lambda value: f"{value:.3f}", border=0) if not issues.empty else "<p>No unresolved category labels.</p>"
     cards = "\n".join(
         f'<section><h2>{html.escape(f["title"])}</h2><a href="{f["stem"]}.png"><img loading="lazy" src="{f["stem"]}.png" alt="{html.escape(f["title"])}"></a><p>{html.escape(f["caption"])}</p><a href="{f["stem"]}.pdf">Download figure PDF</a></section>'
         for f in figures
@@ -558,6 +669,9 @@ a{{color:#235ea8}}.scroll{{overflow:auto}}small{{color:#586776}}
 <p class="notice">{html.escape(metadata['provenance'])}</p>
 <div class="intro"><p>{metadata['transaction_count']:,} completed transactions · {metadata['fruit_count']} fruits ·
 {metadata['sales_start']} to {metadata['sales_end']}</p>
+<p><b>{metadata['fruit_count']} of {metadata['category_count']} supported categories have usable history.</b>
+{metadata['category_issue_count']} of {metadata['source_transaction_count']} input transactions need category review.
+They are excluded from the graphs and model scores below; their original labels are preserved.</p>
 <p>Later test period: <b>{metadata['test_start']} to {metadata['test_end']}</b>, evaluated in
 {metadata['test_weeks']} successive {metadata['horizon_days']}-day forecast blocks. Selected policy chooses
 a method for each fruit before each block using earlier sales. Lower errors are better.</p>
@@ -566,6 +680,13 @@ a method for each fruit before each block using earlier sales. Lower errors are 
 <a href="README.md">Methodology and interpretation</a> · <a href="run_metadata.json">Run metadata</a></p>
 <small>Selection and training are repeated using earlier history before each later block.
 The learning curve is a separate one-day-ahead diagnostic. Generated sales cannot establish real vendor accuracy.</small></div>
+<section><h2>All {metadata['category_count']} supported categories</h2>
+<p>Mango Carabao, Indian Mango, and Apple Mango are separate categories. Guava is excluded.
+Missing history is shown explicitly, without invented sales or zero error scores.</p>
+<div class="scroll">{coverage_table}</div>
+<h2>Labels needing review</h2><div class="scroll">{issues_table}</div>
+<p><a href="category_coverage.csv">Category coverage CSV</a> · <a href="category_review.csv">Records needing review</a> ·
+<a href="input_reconciliation.json">Reconciled input totals</a></p></section>
 <section><h2>Does the forecast help sales planning?</h2>
 <p>Compare daily errors, {metadata['horizon_days']}-day total errors, and performance against the recent average.
 Positive improvement means smaller daily errors than the average. Tolerance checks need limits chosen with the vendor.</p>
@@ -606,7 +727,10 @@ def main(argv=None):
             parser.error("The target share must be greater than zero and at most 100 percent.")
         if args.daily_tolerance_kg is None and args.period_tolerance_kg is None:
             parser.error("Specify a daily or period tolerance before choosing a target share.")
-    transactions, partial = load_sales(args.input, args.exclude_generated)
+    source_transactions, partial = load_sales(args.input, args.exclude_generated)
+    transactions, issues = split_supported_sales(source_transactions)
+    if transactions.empty:
+        raise ValueError("No sales have a supported specific category. Confirm mango varieties and category names first.")
     daily = server._daily_sales_frame(transactions)
     predictions, development, selection = backtest(daily, args.test_weeks, args.horizon_days)
     metrics = summarize(predictions, ["model"], args.daily_tolerance_kg).set_index("model").loc[MODELS].reset_index()
@@ -627,10 +751,15 @@ def main(argv=None):
         "forecast_source_sha256": hashlib.sha256((ROOT / "tool/forecast_server.py").read_bytes()).hexdigest(),
         "evaluation_source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "metrics_source_sha256": hashlib.sha256((ROOT / "tool/forecast_metrics.py").read_bytes()).hexdigest(),
+        "category_asset_sha256": hashlib.sha256(CATEGORY_PATH.read_bytes()).hexdigest(),
+        "category_source_sha256": hashlib.sha256((ROOT / "tool/fruit_categories.py").read_bytes()).hexdigest(),
         "seasonality_source_sha256": hashlib.sha256((ROOT / "tool/forecast_seasonality.py").read_bytes()).hexdigest(),
         "psa_asset_sha256": hashlib.sha256((ROOT / "assets/data/psa_market_history.json").read_bytes()).hexdigest(),
         "provenance": provenance,
         "transaction_count": len(transactions), "generated_transactions": generated,
+        "source_transaction_count": len(source_transactions),
+        "category_issue_count": len(issues),
+        "category_count": len(FRUIT_CATEGORIES),
         "fruit_count": int(transactions["fruit"].nunique()),
         "sales_start": str(transactions["date"].min()), "sales_end": str(transactions["date"].max()),
         "excluded_partial_day": str(partial) if partial else None,
@@ -651,7 +780,25 @@ def main(argv=None):
                      "pandas": pd.__version__, "xgboost": xgboost.__version__, "matplotlib": matplotlib.__version__},
         "parameters": server._train_model(server._training_frame(development)[0]).get_params(),
     }
-    assessment = vendor_assessment(predictions, totals, metadata)
+    coverage = category_coverage(transactions, predictions)
+    assessment = coverage[["fruit", "history_status", "evaluation_status"]].merge(
+        vendor_assessment(predictions, totals, metadata), on="fruit", how="left"
+    )
+    assessment["assessment"] = assessment["assessment"].fillna(assessment["evaluation_status"])
+    coverage.to_csv(output / "category_coverage.csv", index=False)
+    issues.to_csv(output / "category_review.csv", index=False)
+
+    def source_totals(rows):
+        return {"transactions": len(rows), "kilograms": float(rows["weight_kg"].sum()),
+                "revenue_centavos": int(rows["total_centavos"].sum())}
+
+    (output / "input_reconciliation.json").write_text(json.dumps({
+        "completed_closed_day_input": source_totals(source_transactions),
+        "included_in_analysis": source_totals(transactions),
+        "excluded_for_category_review": source_totals(issues),
+        "scope": "After status, date, weight, and optional generated-record filters; before category resolution",
+        "original_input_modified": False,
+    }, indent=2), encoding="utf-8")
     predictions.to_csv(output / "predictions.csv", index=False)
     metrics.to_csv(output / "model_metrics.csv", index=False)
     comparison = predictions.pivot(
@@ -681,8 +828,8 @@ def main(argv=None):
     (output / "run_metadata.json").write_text(json.dumps(metadata, indent=2, allow_nan=False), encoding="utf-8")
     print("Generating local PNG and PDF figures...", flush=True)
     figures = generate_figures(output, transactions, daily, predictions, metrics, learning, provenance,
-                               totals, assessment, args.horizon_days)
-    write_report(output, metadata, metrics, figures, period_metrics, assessment)
+                               totals, assessment, args.horizon_days, coverage, issues)
+    write_report(output, metadata, metrics, figures, period_metrics, assessment, coverage, issues)
     print(metrics[["model", "mae_kg", "rmse_kg", "wape_percent"]].to_string(index=False))
     print(f"\n{provenance}\nOpen: {output / 'index.html'}", flush=True)
 

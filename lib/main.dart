@@ -16,6 +16,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:local_auth/local_auth.dart';
 
 import 'data/app_database.dart';
+import 'data/fruit_categories.dart';
 import 'firebase_options.dart';
 import 'services/ai_automation_client.dart';
 import 'services/camera_eye_service.dart';
@@ -360,7 +361,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     'Apple',
     'Orange',
     'Banana',
-    'Mango',
+    'Mango Carabao',
     'Grapes',
   ];
   final Map<String, int> _prices = <String, int>{};
@@ -371,7 +372,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
   static const List<TransactionData> _demoTransactionHistory =
       <TransactionData>[
         TransactionData(
-          'Mango',
+          'Mango Carabao',
           '1.2 kg',
           'PHP 72.00',
           'Apr 29, 2026',
@@ -411,7 +412,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           'Cancelled',
         ),
         TransactionData(
-          'Mango',
+          'Mango Carabao',
           '1.4 kg',
           'PHP 84.00',
           'Apr 29, 2026',
@@ -459,7 +460,7 @@ class _FruityVensHomeState extends State<FruityVensHome> {
           'Sold',
         ),
         TransactionData(
-          'Mango',
+          'Mango Carabao',
           '0.9 kg',
           'PHP 54.00',
           'Apr 29, 2026',
@@ -569,7 +570,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     'Apple': FruitInfo('Apple', Icons.apple_rounded, 90, 20),
     'Orange': FruitInfo('Orange', Icons.circle_rounded, 85, 25),
     'Banana': FruitInfo('Banana', Icons.rice_bowl_rounded, 35, 28),
-    'Mango': FruitInfo('Mango', Icons.spa_rounded, 60, 42),
     'Grapes': FruitInfo('Grapes', Icons.bubble_chart_rounded, 130, 10),
     'Lemon': FruitInfo('Lemon', Icons.brightness_1_rounded, 70, 17),
     'Papaya': FruitInfo('Papaya', Icons.eco_rounded, 50, 15),
@@ -577,7 +577,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     'Pineapple': FruitInfo('Pineapple', Icons.park_rounded, 45, 0),
     'Calamansi': FruitInfo('Calamansi', Icons.brightness_1_rounded, 65, 13),
     'Pomelo': FruitInfo('Pomelo', Icons.circle_rounded, 95, 10),
-    'Guava': FruitInfo('Guava', Icons.local_florist_rounded, 50, 21),
     'Avocado': FruitInfo('Avocado', Icons.grass_rounded, 110, 18),
     'Coconut': FruitInfo('Coconut', Icons.beach_access_rounded, 35, 20),
     'Dalandan': FruitInfo('Dalandan', Icons.circle_rounded, 75, 18),
@@ -607,34 +606,9 @@ class _FruityVensHomeState extends State<FruityVensHome> {
     'Strawberries': FruitInfo('Strawberries', Icons.favorite_rounded, 120, 8),
   };
 
-  static final Set<String> _scanReadyFruits = _catalog.keys.toSet();
+  static final Set<String> _scanReadyFruits = fruitCategoryNames.toSet();
 
-  static const List<String> _scanReadyFruitOrder = <String>[
-    'Apple',
-    'Orange',
-    'Banana',
-    'Mango',
-    'Grapes',
-    'Lemon',
-    'Papaya',
-    'Watermelon',
-    'Pineapple',
-    'Calamansi',
-    'Pomelo',
-    'Avocado',
-    'Dragon Fruit',
-    'Durian',
-    'Mangosteen',
-    'Rambutan',
-    'Lanzones',
-    'Melon',
-    'Guyabano',
-    'Mango Carabao',
-    'Indian Mango',
-    'Apple Mango',
-    'Pear',
-    'Strawberries',
-  ];
+  static const List<String> _scanReadyFruitOrder = fruitCategoryNames;
 
   static const List<_WalkthroughStep> _walkthroughSteps = <_WalkthroughStep>[
     _WalkthroughStep(
@@ -1796,10 +1770,6 @@ class _FruityVensHomeState extends State<FruityVensHome> {
 
   String _scaleFruitNameForHardware(String fruit) {
     switch (fruit) {
-      case 'Mango Carabao':
-      case 'Indian Mango':
-      case 'Apple Mango':
-        return 'Mango';
       case 'Strawberry':
         return 'Strawberries';
       case 'Grape':

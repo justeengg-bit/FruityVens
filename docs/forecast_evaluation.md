@@ -24,16 +24,42 @@ of the results, read [evaluating usefulness for vendors](vendor_forecast_evaluat
 ## Included figures
 
 1. Daily total kilograms and revenue, with trailing seven-day averages.
-2. Seven-day sales trends for every fruit.
+2. Seven-day sales trends for all 23 supported categories, with explicit missing-history panels.
 3. Daily sales and transaction-weight distributions, including zero-sale fruit-days.
 4. Average kilograms sold by weekday.
 5. Test MAE and WAPE comparison of XGBoost, previous week, recent average, and the selected policy.
 6. Actual versus predicted daily kilograms for every fruit.
 7. XGBoost training/development-validation MAE versus boosting rounds.
-8. XGBoost actual/predicted scatter and signed-error histogram.
+8. Selected forecasting procedure's reference/predicted scatter and signed-error histogram.
 9. Actual and predicted total kilograms per fruit and forecast period.
 10. Selected policy's daily and period-total MAE by fruit.
 11. Daily MAE by requested forecast day for all methods.
+
+Figure `00_category_coverage` precedes these eleven figures, making twelve exports
+in total. It counts the completed input transactions assigned to each category;
+zero transactions in the file do not establish zero customer demand. Explanatory
+captions are embedded in the exported PNG and PDF figures as well as the report.
+
+## Categories and mango records
+
+The user confirmed **23 specific categories**. The canonical configuration is
+`assets/data/fruit_categories.json`, mirrored in `lib/data/fruit_categories.dart`
+and checked by `tool.test_fruit_categories`. Guava and generic Mango are excluded
+from the supported list. Mango Carabao, Indian Mango, and Apple Mango remain distinct.
+Aliases such as Carabao Mango can be normalized without inventing a variety.
+
+The legacy sample input contains 1,241 complete-day transactions. Of these,
+194 are labelled only Mango and cannot be assigned to a variety. The corrected
+report analyzes the remaining 1,047 transactions across eight categories. All
+23 categories still appear in coverage tables and category-specific plots; the
+other 15 show missing history rather than zero sales or zero errors.
+
+`category_review.csv` preserves the excluded transactions, original fruit labels,
+weights, dates, and reasons for review. `input_reconciliation.json` verifies the
+included and excluded transaction counts, kilograms, and revenue against the
+original completed input. The source file and existing phone history are preserved.
+Global sales totals in the figures cover only the included category-resolved
+transactions, so they differ from the unfiltered source totals.
 
 ## Evaluation design
 
@@ -48,6 +74,9 @@ later training/selection after they become available; upcoming sales cannot.
 A one-day recursive bridge reproduces the app's incomplete-today convention.
 Actual values inside a forecast block never become recursive prediction inputs.
 No hyperparameters are optimized against the final test scores.
+The default weekly-spaced forecast origins share the same starting weekday.
+Consequently, the error-by-requested-day graph mixes weekday effects and horizon
+effects; it does not isolate the effect of forecasting further into the future.
 
 The learning curve is a different diagnostic: MAE after each of 180 boosting
 rounds on earlier training and later development-validation rows. It uses

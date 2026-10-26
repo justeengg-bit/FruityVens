@@ -1,10 +1,9 @@
 block,training_end,forecast_start,fruit,model_used
 1,2026-09-09,2026-09-11,Apple,XGBRegressor
 1,2026-09-09,2026-09-11,Banana,Recent average
-1,2026-09-09,2026-09-11,Calamansi,XGBRegressor
+1,2026-09-09,2026-09-11,Calamansi,Recent average
 1,2026-09-09,2026-09-11,Grapes,Recent average
-1,2026-09-09,2026-09-11,Mango,XGBRegressor
-1,2026-09-09,2026-09-11,Orange,Recent average
+1,2026-09-09,2026-09-11,Orange,XGBRegressor
 1,2026-09-09,2026-09-11,Papaya,Recent average
 1,2026-09-09,2026-09-11,Pineapple,XGBRegressor
 1,2026-09-09,2026-09-11,Watermelon,Recent average
@@ -12,7 +11,6 @@ block,training_end,forecast_start,fruit,model_used
 2,2026-09-16,2026-09-18,Banana,Recent average
 2,2026-09-16,2026-09-18,Calamansi,Recent average
 2,2026-09-16,2026-09-18,Grapes,Recent average
-2,2026-09-16,2026-09-18,Mango,XGBRegressor
 2,2026-09-16,2026-09-18,Orange,Recent average
 2,2026-09-16,2026-09-18,Papaya,Recent average
 2,2026-09-16,2026-09-18,Pineapple,XGBRegressor
@@ -21,16 +19,14 @@ block,training_end,forecast_start,fruit,model_used
 3,2026-09-23,2026-09-25,Banana,Recent average
 3,2026-09-23,2026-09-25,Calamansi,Recent average
 3,2026-09-23,2026-09-25,Grapes,Recent average
-3,2026-09-23,2026-09-25,Mango,XGBRegressor
 3,2026-09-23,2026-09-25,Orange,Recent average
 3,2026-09-23,2026-09-25,Papaya,Recent average
-3,2026-09-23,2026-09-25,Pineapple,XGBRegressor
+3,2026-09-23,2026-09-25,Pineapple,Recent average
 3,2026-09-23,2026-09-25,Watermelon,Recent average
 4,2026-09-30,2026-10-02,Apple,Recent average
 4,2026-09-30,2026-10-02,Banana,Recent average
 4,2026-09-30,2026-10-02,Calamansi,Recent average
 4,2026-09-30,2026-10-02,Grapes,Recent average
-4,2026-09-30,2026-10-02,Mango,XGBRegressor
 4,2026-09-30,2026-10-02,Orange,Recent average
 4,2026-09-30,2026-10-02,Papaya,Recent average
 4,2026-09-30,2026-10-02,Pineapple,Recent average

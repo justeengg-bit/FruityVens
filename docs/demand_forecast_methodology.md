@@ -10,6 +10,15 @@ histories. `include_generated_sales: true` explicitly enables a labelled demonst
 Both gram and kilogram fields use their declared units; invalid/nonfinite weights
 are rejected. Timestamps without offsets use the Manila business timezone.
 
+The supported list is the 23 specific categories in `assets/data/fruit_categories.json`.
+Guava is excluded. Mango Carabao, Indian Mango, and Apple Mango are separate
+targets. Records labelled only Mango are preserved but excluded from training
+and prediction until the variety is confirmed. Explicit variety aliases can be
+normalized; a variety is never inferred from a generic label. Coverage includes
+categories without history and counts excluded records requiring category review.
+The app's active category list matches the same configuration. Original historical
+transactions are not automatically relabelled or removed.
+
 ## Sales And Calendar Features
 
 XGBoost regression uses fruit identity, the date being predicted, month,

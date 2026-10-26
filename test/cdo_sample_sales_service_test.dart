@@ -79,7 +79,12 @@ void main() {
       expect(await database.getSalesTransactions(), isEmpty);
       final AiAutomationResult forecast = dataset.forecast();
       expect(forecast.coverage!.observedDays, 101);
-      expect(forecast.predictions, hasLength(9));
+      expect(forecast.predictions, hasLength(8));
+      expect(
+        forecast.predictions.any((prediction) => prediction.fruit == 'Mango'),
+        isFalse,
+      );
+      expect(forecast.summary, contains('variety review'));
       expect(forecast.source, 'Local sample data');
       for (final AiForecastPrediction prediction in forecast.predictions) {
         expect(prediction.dailyPredictions, hasLength(7));

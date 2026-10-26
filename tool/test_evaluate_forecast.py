@@ -9,9 +9,25 @@ import pandas as pd
 
 from tool import evaluate_forecast as evaluation
 from tool import forecast_server as server
+from tool.fruit_categories import FRUIT_CATEGORIES
 
 
 class EvaluationTests(unittest.TestCase):
+    def test_error_plot_keeps_unknown_categories_visible_without_zero_error_bars(self):
+        assessment = pd.DataFrame({"fruit": ["Apple"], "daily_mae_kg": [1.5], "period_mae_kg": [3.]})
+        fig = evaluation.fruit_error_figure(assessment, list(FRUIT_CATEGORIES), 7)
+        try:
+            for ax in fig.axes:
+                self.assertEqual([label.get_text() for label in ax.get_yticklabels()], list(FRUIT_CATEGORIES))
+                low, high = sorted(ax.get_ylim())
+                for text in ax.texts:
+                    self.assertLess(low, text.get_position()[1])
+                    self.assertGreater(high, text.get_position()[1])
+                self.assertEqual(len(ax.texts), 22)
+                self.assertTrue(np.isnan(ax.patches[-1].get_width()))
+        finally:
+            evaluation.plt.close(fig)
+
     def test_metrics_do_not_cancel_errors_and_handle_zero_actual_totals(self):
         rows = pd.DataFrame({"actual_kg": [2, 4, 0], "predicted_kg": [3, 3, 1]})
         result = evaluation.error_metrics(rows)

@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/services.dart';
 
 import '../data/app_database.dart';
+import '../data/fruit_categories.dart';
 import 'ai_automation_client.dart';
 
 /// Bundled generated history. Loading validates it; importing adds normal sales.
@@ -91,6 +92,9 @@ class CdoSampleSalesDataset {
     final Map<String, Map<DateTime, double>> totals =
         <String, Map<DateTime, double>>{};
     for (final LocalSale sale in sales) {
+      if (!fruitCategoryNames.contains(sale.fruitName)) {
+        continue;
+      }
       final Map<DateTime, double> fruit = totals.putIfAbsent(
         sale.fruitName,
         () => <DateTime, double>{},
@@ -138,13 +142,18 @@ class CdoSampleSalesDataset {
     return AiAutomationResult(
       summary:
           'Illustrative seven-day projection from generated CDO sample sales. '
-          'Uses the last four matching weekdays; this is not a forecast of actual vendor demand.',
+          'Uses the last four matching weekdays for supported categories only. '
+          'Generic Mango records need variety review and are excluded; '
+          'this is not a forecast of actual vendor demand.',
       model: 'Four-week weekday average',
       source: 'Local sample data',
       predictions: predictions,
       coverage: AiForecastCoverage(
-        transactionCount: sales.length,
+        transactionCount: sales
+            .where((sale) => fruitCategoryNames.contains(sale.fruitName))
+            .length,
         observedDays: sales
+            .where((sale) => fruitCategoryNames.contains(sale.fruitName))
             .map((sale) {
               final DateTime date = sale.soldAt;
               return '${date.year}-${date.month}-${date.day}';

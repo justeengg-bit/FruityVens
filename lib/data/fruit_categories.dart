@@ -1,0 +1,27 @@
+// Keep in sync with assets/data/fruit_categories.json.
+// tool.test_fruit_categories verifies that both platforms use the same list.
+const List<String> fruitCategoryNames = <String>[
+  'Apple',
+  'Orange',
+  'Banana',
+  'Grapes',
+  'Lemon',
+  'Papaya',
+  'Watermelon',
+  'Pineapple',
+  'Calamansi',
+  'Pomelo',
+  'Avocado',
+  'Dragon Fruit',
+  'Durian',
+  'Mangosteen',
+  'Rambutan',
+  'Lanzones',
+  'Melon',
+  'Guyabano',
+  'Mango Carabao',
+  'Indian Mango',
+  'Apple Mango',
+  'Pear',
+  'Strawberries',
+];

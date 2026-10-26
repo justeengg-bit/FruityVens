@@ -36,7 +36,7 @@ class _NineFruitForecastClient extends AiAutomationClient {
       'Apple',
       'Banana',
       'Grapes',
-      'Mango',
+      'Mango Carabao',
       'Orange',
       'Papaya',
       'Pineapple',
